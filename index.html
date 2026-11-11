@@ -285,6 +285,17 @@ select.inp{appearance:none;font-family:var(--sans);font-weight:600;background-im
 .livechip i{width:7px;height:7px;border-radius:50%;background:var(--dim)}
 .livechip.on i{background:var(--up);box-shadow:0 0 0 4px rgba(32,214,160,.2);animation:pulse 2s infinite}
 .livechip.off i{background:var(--dn)}
+/* sincronización */
+.syncst{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--mut);font-weight:700;margin-top:6px}
+.syncst i,#syncchip i{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+.syncst.ok i,#syncchip.ok i{background:var(--acc)}
+.syncst.pending i,.syncst.loading i,#syncchip.pending i,#syncchip.loading i{background:var(--amb)}
+.syncst.offline i,.syncst.error i,#syncchip.offline i,#syncchip.error i{background:var(--dn)}
+#syncchip{margin-left:10px}
+@media(min-width:901px){#syncchip{display:none!important}}
+.suser{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;background:var(--bg2);border:1px solid var(--line);margin-bottom:12px}
+.suser img,.suser .av{width:40px;height:40px;border-radius:50%;flex:none;background:var(--line);display:grid;place-items:center;font-weight:800}
+.suser b{display:block;overflow-wrap:anywhere}
 body.noanim *,body.noanim *::before,body.noanim *::after{animation:none!important;transition:none!important}
 
 @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
@@ -356,7 +367,7 @@ body.noanim *,body.noanim *::before,body.noanim *::after{animation:none!importan
   </aside>
   <main class="main" id="main">
     <header class="top">
-      <div><h1 id="title"></h1><div class="sub" id="subtitle"></div><div id="livechip"></div></div>
+      <div><h1 id="title"></h1><div class="sub" id="subtitle"></div><div id="livechip"></div><span id="syncchip"></span></div>
       <div class="top-r">
         <div id="rangebar" class="chips"></div>
         <button class="btn btn-pri hide-m" data-act="new" id="topnew"></button>
@@ -424,6 +435,7 @@ function save(){
   try{localStorage.setItem(KEY,JSON.stringify({v:1,trades:S.trades,set:S.set}));storageOK=true;flashSaved()}
   catch(e){storageOK=false;console.warn('[TJ] no se pudo guardar',e);toast(ic('alert',16)+' Sin almacenamiento: exporta tu respaldo','dn')}
   window.dispatchEvent(new CustomEvent('tj:change',{detail:{trades:S.trades.length}}));
+  syncPush();
 }
 const saveSoon=()=>{clearTimeout(saveTimer);saveTimer=setTimeout(save,400)};
 function flashSaved(){$$('.savedot').forEach(el=>{el.classList.add('flash');setTimeout(()=>el.classList.remove('flash'),700)})}
@@ -549,10 +561,10 @@ function closeModal(silent){
   document.body.classList.remove('lock');
 }
 const hasModal=()=>$('#modalroot').children.length>0;
-function confirmBox(title,msg,ok='Eliminar'){
+function confirmBox(title,msg,ok='Eliminar',okCls='btn-dn'){
   return new Promise(res=>{
     const m=openModal(`<div class="mb" style="padding:22px"><h3 style="font-size:20px;font-weight:800">${title}</h3><p class="mut">${msg}</p>
-      <div class="btnrow" style="margin-top:6px"><button class="btn" style="flex:1" data-no>Cancelar</button><button class="btn btn-dn" style="flex:1" data-ok>${ok}</button></div></div>`,{sm:true});
+      <div class="btnrow" style="margin-top:6px"><button class="btn" style="flex:1" data-no>Cancelar</button><button class="btn ${okCls}" style="flex:1" data-ok>${ok}</button></div></div>`,{sm:true});
     $('[data-ok]',m).onclick=()=>{closeModal();res(true)};$('[data-no]',m).onclick=()=>{closeModal();res(false)};
   });
 }
@@ -670,9 +682,9 @@ function render(){
   $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':'Cuenta, riesgo y datos';
   $('#rangebar').innerHTML=(v==='panel'||v==='ana')&&S.trades.length?RANGES.map(([k,l])=>`<button class="chip ${S.ui.range===k?'on':''}" data-act="range" data-v="${k}">${l}</button>`).join(''):'';
   const eq=equityNow();
-  $('#sidefoot').innerHTML=`<div class="lbl">Capital</div><div class="mono" style="font-size:20px;font-weight:800;margin:3px 0 8px">${fmtMoney(eq)}</div><div class="savedot"><i></i>${storageOK?'Guardado en este navegador':'Sin almacenamiento'}</div>`;
+  $('#sidefoot').innerHTML=`<div class="lbl">Capital</div><div class="mono" style="font-size:20px;font-weight:800;margin:3px 0 8px">${fmtMoney(eq)}</div><div class="savedot"><i></i>${storageOK?'Guardado en este navegador':'Sin almacenamiento'}</div><div class="syncst"></div>`;
   ({panel:renderPanel,bit:renderJournal,ana:renderAnalysis,set:renderSettings})[v]();
-  paintLive();
+  paintLive();paintSync();if(v==='set'&&!SY.user)syncPreload();
   window.scrollTo({top:0});
 }
 const bn=(id,i,l,v)=>`<button class="bn ${v===id?'on':''}" data-act="nav" data-view="${id}">${ic(i,22)}${l}</button>`;
@@ -852,6 +864,7 @@ function renderSettings(){
   const sz=(()=>{try{return(localStorage.getItem(KEY)||'').length/1024}catch(e){return 0}})();
   const nf=(l,k,step='any')=>`<label class="fld"><span class="lbl">${l}</span><input class="inp" type="number" step="${step}" inputmode="decimal" data-bind="set" data-k="${k}" value="${S.set[k]}"></label>`;
   $('#v-set').innerHTML=`<div class="agrid">
+   <div class="card rise" id="synccard">${syncCardHtml()}</div>
    <div class="card rise"><div class="card-h"><h3>${ic('wallet',18)} Cuenta y riesgo</h3></div><div class="sgrid">
      ${nf('Capital inicial','capital')}${nf('Riesgo por trade %','riskPct')}${nf('Riesgo abierto máx %','maxOpenRisk')}${nf('Pérdida diaria máx %','dailyLoss')}${nf('Comisión % por lado','feePct')}
      <label class="fld"><span class="lbl">Moneda</span><select class="inp" data-bind="set" data-k="currency">${['USD','MXN','EUR'].map(c=>`<option ${S.set.currency===c?'selected':''}>${c}</option>`).join('')}</select></label></div></div>
@@ -865,7 +878,7 @@ function renderSettings(){
      <div class="btnrow"><button class="btn" data-act="exp-json">${ic('down',18)} Respaldo JSON</button><button class="btn" data-act="exp-csv">${ic('down',18)} CSV</button><button class="btn" data-act="imp-csv">${ic('up',18)} Importar CSV (Excel)</button><button class="btn" data-act="tpl-csv">${ic('down',18)} Plantilla CSV</button><button class="btn" data-act="imp">${ic('up',18)} Importar JSON</button>
      <button class="btn" data-act="demo">${ic('bolt',18)} Cargar demo</button>${S.trades.some(t=>t.demo)?`<button class="btn" data-act="demo-del">Borrar demo</button>`:''}<button class="btn danger" data-act="wipe">${ic('trash',18)} Borrar todo</button></div>
      <input type="file" id="impfile" accept=".json,application/json" hidden>
-     <p class="mut" style="margin-top:12px;font-size:12px">${S.trades.length} trades · ${sz.toFixed(1)} KB en localStorage. ${storageOK?'Se guardan solo en este navegador: exporta un respaldo con frecuencia.':'⚠ Este navegador bloquea el almacenamiento.'}</p></div></div>`;
+     <p class="mut" style="margin-top:12px;font-size:12px">${S.trades.length} trades · ${sz.toFixed(1)} KB en localStorage. ${!storageOK?'⚠ Este navegador bloquea el almacenamiento.':SY.user?'Se guardan en este navegador y se sincronizan con tu cuenta. Igual conviene exportar un respaldo de vez en cuando.':'Se guardan solo en este navegador: inicia sesión para sincronizarlos o exporta un respaldo con frecuencia.'}</p></div></div>`;
 }
 
 /* =====================================================================
@@ -1152,7 +1165,7 @@ document.addEventListener('click',async ev=>{
     case'demo':if(S.trades.length&&!S.trades.every(x=>x.demo)&&!await confirmBox('¿Cargar demo?','Se añadirán trades de ejemplo a los tuyos. Podrás borrarlos después.','Cargar'))break;
       S.trades=[...makeDemo(),...S.trades.filter(x=>!x.demo)];save();S.prev={};render();toast(ic('bolt',16)+' Demo cargada','up');break;
     case'demo-del':S.trades=S.trades.filter(x=>!x.demo);save();S.prev={};render();toast('Demo eliminada');break;
-    case'wipe':if(await confirmBox('¿Borrar TODO?','Se eliminarán todas tus operaciones. Esta acción no se puede deshacer.','Borrar todo')){S.trades=[];save();S.prev={};render();toast('Bitácora vacía')}break;
+    case'wipe':if(await confirmBox('¿Borrar TODO?','Se eliminarán todas tus operaciones.'+(SY.user?' También se borrarán de la nube y de tus otros dispositivos.':'')+' Esta acción no se puede deshacer.','Borrar todo')){S.trades=[];save();S.prev={};render();toast('Bitácora vacía')}break;
     case'exp-json':download('bitacora-respaldo-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify({v:1,trades:S.trades,set:S.set},null,1),'application/json');S.set.lastBackup=Date.now();save();toast(ic('check',16)+' Respaldo descargado','up');if(S.ui.view==='panel')render();break;
     case'exp-csv':exportCSV();break;
     case'imp':$('#impfile').click();break;
@@ -1160,6 +1173,8 @@ document.addEventListener('click',async ev=>{
     case'tpl-csv':templateCSV();break;
     case'rmstrat':S.set.strategies=S.set.strategies.filter(s=>s!==a.dataset.v);save();renderSettings();break;
     case'addstrat':{const i=$('#newstrat'),v=i.value.trim();if(v&&!S.set.strategies.includes(v)){S.set.strategies.push(v);save();renderSettings()}break}
+    case'login':signIn();break;
+    case'logout':signOutSync();break;
   }
 });
 document.addEventListener('keydown',ev=>{
@@ -1293,10 +1308,260 @@ window.TJ={
   open:()=>openTradeForm()
 };
 
+/* =====================================================================
+   SINCRONIZACIÓN (opcional) · login con Google + Firestore
+   - localStorage sigue siendo la copia principal de cada dispositivo.
+   - Nube: users/{uid}/trades/{id} (un documento por trade) y
+     users/{uid}/meta/settings. Las reglas de Firestore solo dejan
+     entrar a la cuenta autorizada (ver firestore.rules).
+   - Fusión a 3 vías contra la "base": lo último que ESTE dispositivo
+     confirmó con la nube (localStorage['tj.sync']). Así se distingue
+     "lo borré yo" de "lo borraron en otro dispositivo" y nada se pierde
+     si se cierra la página antes de subir.
+   - Precio en vivo / escaneo de velas (mark, scanned, noFeed) y la
+     preferencia de animaciones se quedan solo en este dispositivo:
+     liveTick corre cada 20 s y gastaría la cuota gratuita de escrituras.
+   - Los trades de demostración nunca se suben.
+   ===================================================================== */
+const FB_CFG={apiKey:'AIzaSyDyQ8FR-XNDE5j8IVDKaM0UXbisCdoEIao',authDomain:'bitacora-trading-19d27.firebaseapp.com',projectId:'bitacora-trading-19d27',
+  storageBucket:'bitacora-trading-19d27.firebasestorage.app',messagingSenderId:'1018269196450',appId:'1:1018269196450:web:10b7c19423dfe9f062b7fb'};
+const FB_V='13.2.0',fbURL=m=>`https://www.gstatic.com/firebasejs/${FB_V}/firebase-${m}.js`;
+const SKEY='tj.sync',RKEY='tj.redirect',SETK='__settings';
+const LOCAL_T=['mark','scanned','noFeed'],LOCAL_S=['anim'];
+const SY={boot:null,fb:null,authReady:false,user:null,state:'off',base:null,ready:false,reconciling:false,first:false,
+  remote:null,remoteSet:undefined,ref:null,unsub:[],pend:new Map(),inflight:0,halt:false};
+
+const stable=v=>v===null||typeof v!=='object'?(JSON.stringify(v)??'null'):Array.isArray(v)?'['+v.map(stable).join(',')+']':
+  '{'+Object.keys(v).filter(k=>v[k]!==undefined).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}';
+const h53=s=>{let a=0xdeadbeef,b=0x41c6ce57;for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);a=Math.imul(a^c,2654435761);b=Math.imul(b^c,1597334677)}
+  a=Math.imul(a^a>>>16,2246822507)^Math.imul(b^b>>>13,3266489909);b=Math.imul(b^b>>>16,2246822507)^Math.imul(a^a>>>13,3266489909);
+  return(4294967296*(2097151&b)+(a>>>0)).toString(36)};
+const omit=(o,ks)=>{const r={};for(const k in o)if(!ks.includes(k)&&o[k]!==undefined)r[k]=o[k];return r};
+const cleanT=t=>omit(t,LOCAL_T),cleanS=s=>omit(s,LOCAL_S);
+const hT=t=>h53(stable(cleanT(t))),hS=s=>h53(stable(cleanS(s)));
+const docId=id=>encodeURIComponent(String(id)).replace(/\./g,'%2E');
+const loadBase=()=>{try{return JSON.parse(localStorage.getItem(SKEY)||'null')}catch(e){return null}};
+const saveBase=()=>{try{if(SY.base)localStorage.setItem(SKEY,JSON.stringify(SY.base))}catch(e){}};
+const saveLocal=()=>{try{localStorage.setItem(KEY,JSON.stringify({v:1,trades:S.trades,set:S.set}))}catch(e){}};
+
+/* ---------- estado visible ---------- */
+const SYNC_TXT={off:'',loading:'Conectando con tu cuenta…',ok:'Sincronizado',pending:'Guardando en la nube…',offline:'Sin conexión: se subirá al volver',error:'Error al sincronizar · recarga la página'};
+function syncState(){
+  if(!SY.user)return SY.state==='loading'?'loading':'off';
+  if(SY.state==='error'||SY.halt)return'error';
+  if(!navigator.onLine)return'offline';
+  if(!SY.ready)return'loading';
+  return SY.inflight?'pending':'ok';
+}
+function syncCardHtml(){
+  const u=SY.user,st=syncState(),head=`<div class="card-h"><h3>${ic('shield',18)} Sincronización</h3></div>`;
+  if(!u)return head+`<p class="mut" style="margin:0 0 14px">Inicia sesión con Google para tener tu bitácora en el celular y en la computadora. Es opcional: sin sesión todo sigue funcionando en este navegador.</p>
+    <button class="btn btn-pri" data-act="login" ${st==='loading'?'disabled':''}>${st==='loading'?'Conectando…':'Iniciar sesión con Google'}</button>`;
+  const name=u.displayName||u.email||'Tu cuenta';
+  const av=u.photoURL?`<img src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">`:`<span class="av">${esc(name[0].toUpperCase())}</span>`;
+  return head+`<div class="suser">${av}<div><b>${esc(name)}</b><span class="mut" style="font-size:12px">${esc(u.email||'')}</span></div></div>
+    <div class="syncst ${st}" style="margin:0 0 14px"><i></i>${SYNC_TXT[st]}</div>
+    <button class="btn" data-act="logout">Cerrar sesión</button>`;
+}
+function paintSync(){
+  const st=syncState(),txt=SYNC_TXT[st],inner=txt?'<i></i>'+txt:'';
+  $$('.side-foot .syncst').forEach(el=>{el.className='syncst '+st;el.innerHTML=inner});
+  const c=$('#syncchip');if(c){c.className='livechip '+st;c.innerHTML=inner}
+  const card=$('#synccard');if(card)card.innerHTML=syncCardHtml();
+}
+let renderPend=false;
+function softRender(){ /* repinta sin interrumpir si estás escribiendo o con un formulario abierto */
+  const a=document.activeElement;
+  if(hasModal()||a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)){renderPend=true;return}
+  renderPend=false;const y=scrollY;S.prev={};render();scrollTo(0,y);
+}
+document.addEventListener('focusout',()=>{if(renderPend)setTimeout(()=>{if(renderPend)softRender()},260)});
+addEventListener('online',paintSync);addEventListener('offline',paintSync);
+
+/* ---------- Firebase (se carga solo si hace falta) ---------- */
+function fbStart(){
+  if(!SY.boot)SY.boot=(async()=>{
+    const [app,auth,fs]=await Promise.all(['app','auth','firestore'].map(m=>import(fbURL(m))));
+    const a=app.initializeApp(FB_CFG);
+    const F=SY.fb={auth,fs,au:auth.getAuth(a),db:fs.initializeFirestore(a,{ignoreUndefinedProperties:true})};
+    auth.getRedirectResult(F.au).catch(loginError);
+    await new Promise(res=>auth.onAuthStateChanged(F.au,u=>{onUser(u);res()}));
+    SY.authReady=true;return F;
+  })().catch(e=>{SY.boot=null;throw e});
+  return SY.boot;
+}
+function syncPreload(){if(!SY.boot&&navigator.onLine)fbStart().catch(()=>{})}
+async function syncBoot(){
+  const b=loadBase();let redir=false;
+  try{redir=sessionStorage.getItem(RKEY)==='1';sessionStorage.removeItem(RKEY)}catch(e){}
+  if(!redir&&!(b&&b.uid&&!b.out))return;
+  SY.state='loading';paintSync();
+  try{await fbStart()}
+  catch(e){console.warn('[TJ] sync: no se pudo cargar Firebase',e);SY.state='off';paintSync();addEventListener('online',syncBoot,{once:true})}
+}
+function loginError(e){
+  if(!SY.user){SY.state='off';paintSync()}
+  if(['auth/popup-closed-by-user','auth/cancelled-popup-request','auth/user-cancelled'].includes(e&&e.code))return;
+  console.warn('[TJ] login',e);toast(ic('alert',16)+' No se pudo iniciar sesión ('+esc(e&&e.code||e)+')','dn');
+}
+function popupLogin(F){
+  const p=new F.auth.GoogleAuthProvider();p.setCustomParameters({prompt:'select_account'});
+  return F.auth.signInWithPopup(F.au,p).catch(e=>{
+    if(['auth/popup-blocked','auth/operation-not-supported-in-this-environment'].includes(e.code)){
+      try{sessionStorage.setItem(RKEY,'1')}catch(_){}
+      return F.auth.signInWithRedirect(F.au,p).catch(loginError);
+    }
+    loginError(e);
+  });
+}
+async function signIn(){
+  if(SY.user)return;
+  /* si Firebase ya está cargado, abrimos la ventana de Google en el mismo clic (evita que el navegador la bloquee) */
+  if(SY.authReady){SY.state='loading';paintSync();popupLogin(SY.fb);return}
+  SY.state='loading';paintSync();
+  let F;try{F=await fbStart()}catch(e){SY.state='off';paintSync();toast(ic('alert',16)+' No se pudo conectar. Revisa tu internet.','dn');return}
+  if(!SY.user)popupLogin(F);
+}
+function stopListen(){SY.unsub.forEach(f=>{try{f()}catch(e){}});SY.unsub=[];SY.ready=false}
+async function quietSignOut(){stopListen();if(SY.fb)await SY.fb.auth.signOut(SY.fb.au).catch(()=>{})}
+async function signOutSync(){
+  if(!SY.user)return;
+  if(!await confirmBox('¿Cerrar sesión?','Tus datos se quedan en este dispositivo y en la nube. Dejarán de sincronizarse aquí hasta que vuelvas a entrar.','Cerrar sesión','btn-pri'))return;
+  if(SY.inflight&&!await confirmBox('Hay cambios sin subir','Algunos cambios aún no llegan a la nube. Se subirán la próxima vez que inicies sesión en este dispositivo.','Cerrar igual','btn-pri'))return;
+  if(SY.base&&SY.ready){SY.base.out=true;saveBase()}
+  await quietSignOut();toast('Sesión cerrada');
+}
+
+/* ---------- escuchar la nube ---------- */
+function onUser(u){
+  if(u&&SY.user&&u.uid===SY.user.uid)return;
+  stopListen();
+  Object.assign(SY,{user:u||null,remote:null,remoteSet:undefined,pend:new Map(),first:false});
+  if(!u){SY.state='off';SY.base=null;paintSync();if(S.ui.view==='set')renderSettings();return}
+  let b=loadBase();SY.first=!b||b.uid!==u.uid;
+  if(SY.first)b={uid:u.uid,set:null,t:{}};
+  b.out=false;SY.base=b;SY.state='loading';paintSync();if(S.ui.view==='set')renderSettings();
+  const F=SY.fb,root=F.fs.doc(F.db,'users',u.uid),opt={includeMetadataChanges:true};
+  SY.ref={tcol:F.fs.collection(root,'trades'),sref:F.fs.doc(root,'meta','settings')};
+  SY.unsub.push(F.fs.onSnapshot(SY.ref.tcol,opt,snap=>{
+    if(snap.metadata.fromCache&&!SY.remote)return;  /* la primera lectura debe venir del servidor */
+    const m=new Map();snap.forEach(d=>m.set(d.id,d.data()));SY.remote=m;onRemote();
+  },onSyncErr));
+  SY.unsub.push(F.fs.onSnapshot(SY.ref.sref,opt,snap=>{
+    if(snap.metadata.fromCache&&SY.remoteSet===undefined)return;
+    SY.remoteSet=snap.exists()?snap.data():null;onRemote();
+  },onSyncErr));
+}
+function onSyncErr(e){
+  console.warn('[TJ] sync:',e);
+  if(e.code==='permission-denied'){
+    if(SY.state==='denied')return;SY.state='denied';
+    toast(ic('alert',16)+' Esta cuenta no tiene acceso a esta bitácora. Entra con tu cuenta autorizada.','dn');
+    if(SY.base&&!SY.first){SY.base.out=true;saveBase()}
+    quietSignOut();return;
+  }
+  SY.state='error';paintSync();toast(ic('alert',16)+' Se perdió la conexión con la nube ('+esc(e.code||e.message)+'). Recarga la página.','dn');
+}
+async function onRemote(){
+  if(!SY.remote||SY.remoteSet===undefined||SY.reconciling)return;
+  if(SY.ready){merge();paintSync();return}
+  SY.reconciling=true;
+  try{
+    if(SY.first){ /* migración: primera vez de esta cuenta en este dispositivo */
+      const mine=S.trades.filter(t=>!t.demo).length,inCloud=SY.remote.size;
+      if(mine){
+        download('bitacora-respaldo-antes-de-sincronizar-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify({v:1,trades:S.trades,set:S.set},null,1),'application/json');
+        if(inCloud&&!await confirmBox('¿Combinar con la nube?',`En este dispositivo tienes <b>${mine}</b> trades y en la nube <b>${inCloud}</b>. Se juntarán sin duplicar; si un trade está en los dos lados, se queda la versión más reciente. Ya se descargó un respaldo de este dispositivo.`,'Combinar','btn-pri')){
+          toast('No se combinó nada: tus datos siguen en este dispositivo');await quietSignOut();return;
+        }
+      }
+    }
+    SY.ready=true;SY.state='ok';
+    const r=merge();
+    if(SY.first){
+      const p=[];if(r.up)p.push(r.up+' subidos');if(r.down)p.push(r.down+' recibidos');
+      toast(ic('check',16)+' Sincronizado'+(p.length?' · '+p.join(' · '):''),'up');SY.first=false;
+    }
+  }finally{SY.reconciling=false;paintSync()}
+}
+function syncPush(){if(SY.ready&&!SY.reconciling){merge();paintSync()}}
+
+/* ---------- fusión a 3 vías: local × nube × base ---------- */
+function merge(){
+  const res={up:0,down:0};if(!SY.ready||!SY.remote)return res;
+  const b=SY.base,R=SY.remote,ops=[];let local=false;
+  const L=new Map();S.trades.forEach(t=>{if(!t.demo)L.set(docId(t.id),t)});
+  const confirmed=k=>!SY.pend.has(k);
+  const take=(k,r,l)=>{ /* nube → este dispositivo, conservando lo que es solo local */
+    if(!validTrade(r))return;
+    const keep={};if(l)LOCAL_T.forEach(f=>{if(l[f]!==undefined)keep[f]=l[f]});
+    const n={...r,...keep},i=l?S.trades.indexOf(l):-1;
+    if(i>=0)S.trades[i]=n;else S.trades.unshift(n);
+    if(confirmed(k))b.t[k]=hT(r);local=true;res.down++;
+  };
+  const put=(k,l)=>{l.u=Date.now();const data=cleanT(l);R.set(k,data);ops.push({k,data});res.up++};
+  const del=k=>{R.delete(k);ops.push({k,del:true})};
+  for(const k of new Set([...L.keys(),...R.keys(),...Object.keys(b.t)])){
+    const l=L.get(k),r=R.get(k),B=b.t[k],hl=l?hT(l):null,hr=r?hT(r):null;
+    if(hl===hr){if(confirmed(k)){if(hl)b.t[k]=hl;else delete b.t[k]}continue}
+    if(l&&!r){
+      if(B&&hl===B&&confirmed(k)){S.trades.splice(S.trades.indexOf(l),1);delete b.t[k];local=true;res.down++} /* lo borraron en otro dispositivo */
+      else put(k,l);
+      continue;
+    }
+    if(!l&&r){if(B&&hr===B)del(k);else take(k,r,null);continue}  /* lo borraste aquí / es nuevo de otro dispositivo */
+    const lc=hl!==B,rc=hr!==B;
+    if(!lc)take(k,r,l);else if(!rc)put(k,l);else if((l.u||0)>(r.u||0))put(k,l);else take(k,r,l);
+  }
+  /* ajustes */
+  const rs=SY.remoteSet,hls=hS(S.set),hrs=rs?hS(rs):null;
+  const takeS=()=>{S.set={...DEFAULTS,...rs,anim:S.set.anim};if(confirmed(SETK))b.set=hrs;local=true};
+  const putS=()=>{S.set.u=Date.now();const data=cleanS(S.set);SY.remoteSet=data;ops.push({k:SETK,data,set:true})};
+  if(hls===hrs){if(confirmed(SETK))b.set=hls}
+  else if(!rs)putS();
+  else{const lc=hls!==b.set,rc=hrs!==b.set;
+    if(!lc)takeS();else if(!rc)putS();else if((S.set.u||0)>(rs.u||0))putS();else takeS()}
+
+  if(ops.length&&!SY.halt)commit(ops);
+  if(local||ops.length)saveLocal();
+  saveBase();
+  if(local)softRender();
+  return res;
+}
+function commit(ops){
+  const F=SY.fb,uid=SY.user.uid;
+  for(let i=0;i<ops.length;i+=450){ /* Firestore admite hasta 500 operaciones por lote */
+    const chunk=ops.slice(i,i+450),batch=F.fs.writeBatch(F.db);
+    chunk.forEach(o=>{
+      if(o.set)batch.set(SY.ref.sref,o.data);
+      else if(o.del)batch.delete(F.fs.doc(SY.ref.tcol,o.k));
+      else batch.set(F.fs.doc(SY.ref.tcol,o.k),o.data);
+      SY.pend.set(o.k,(SY.pend.get(o.k)||0)+1);
+    });
+    SY.inflight++;
+    const done=ok=>{
+      if(!SY.user||SY.user.uid!==uid)return;
+      chunk.forEach(o=>{
+        const n=(SY.pend.get(o.k)||1)-1;if(n>0){SY.pend.set(o.k,n);return}  /* hay una escritura más nueva en camino */
+        SY.pend.delete(o.k);if(!ok)return;
+        if(o.set)SY.base.set=hS(o.data);else if(o.del)delete SY.base.t[o.k];else SY.base.t[o.k]=hT(o.data);
+      });
+      saveBase();
+    };
+    batch.commit().then(()=>done(true),e=>{
+      done(false);console.warn('[TJ] sync: escritura rechazada',e);
+      if(e.code==='permission-denied')return onSyncErr(e);
+      SY.halt=true; /* no reintentar en bucle; al recargar se vuelve a intentar */
+      toast(ic('alert',16)+(e.code==='resource-exhausted'?' Se alcanzó el límite gratis de hoy. Tus datos siguen guardados aquí y se subirán después.':' No se pudo guardar en la nube ('+esc(e.code||e.message)+')'),'dn');
+    }).finally(()=>{SY.inflight--;paintSync()});
+  }
+}
+
 /* ---------- arranque ---------- */
 load();
 const h0=location.hash.slice(1);if(VIEWS[h0])S.ui.view=h0;
 render();
+syncBoot();
 liveTick();setInterval(liveTick,20000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)liveTick()});
 if(!storageOK)toast(ic('alert',16)+' Este navegador bloquea el almacenamiento local','dn');
 })();
