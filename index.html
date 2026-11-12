@@ -317,6 +317,24 @@ body.noanim *,body.noanim *::before,body.noanim *::after{animation:none!importan
 @keyframes rpop{0%{opacity:0;transform:translate(-50%,30px) scale(.6)}20%{opacity:1;transform:translate(-50%,0) scale(1.08)}70%{opacity:1;transform:translate(-50%,-30px) scale(1)}100%{opacity:0;transform:translate(-50%,-90px) scale(1)}}
 
 /* responsive */
+.show-m{display:none!important}
+/* oportunidades */
+.ogrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:14px;align-items:start;margin-bottom:14px}
+.ocard .oh{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:10px}
+.ocard .oh b{font-size:18px}.ocard .oh .mono{font-size:20px;font-weight:800}
+.orow{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+.orow span:first-child{color:var(--mut)}.orow b{font-family:var(--mono);text-align:right}
+.oband{position:relative;height:8px;border-radius:99px;background:var(--line);margin:10px 0 4px}
+.oband i{position:absolute;top:-4px;width:3px;height:16px;border-radius:2px;background:var(--tx)}
+.oband em{position:absolute;top:0;height:8px;border-radius:99px;background:rgba(90,162,255,.35)}
+.osig{margin-top:12px;padding:12px;border-radius:14px;border:1px solid var(--line);background:var(--bg2)}
+.osig.buy{border-color:rgba(32,214,160,.45)}
+.osig h4{font-size:14px;font-weight:800;margin:0 0 6px;display:flex;gap:8px;align-items:center}
+.otable{width:100%;border-collapse:collapse;font-size:13px}
+.otable th{font:700 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--mut);text-align:right;padding:8px 6px;border-bottom:1px solid var(--line)}
+.otable td{font-family:var(--mono);text-align:right;padding:9px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+.otable th:first-child,.otable td:first-child{text-align:left}
+.oscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 @media(max-width:1179px){
   .thead{display:none}
   .row{grid-template-columns:1fr 1fr 1fr;grid-template-areas:"sym sym pnl" "dir date r" "ent sl tp";row-gap:10px;padding:13px 14px}
@@ -330,6 +348,7 @@ body.noanim *,body.noanim *::before,body.noanim *::after{animation:none!importan
   .shell{display:block}.side{display:none}
   .main{padding:16px 14px calc(104px + env(safe-area-inset-bottom))}
   .hide-m{display:none!important}
+  .show-m{display:grid!important}
   .top{margin-bottom:14px}
   .bottom{display:grid;grid-template-columns:1fr 1fr 74px 1fr 1fr;position:fixed;left:0;right:0;bottom:0;z-index:40;padding:6px 6px calc(8px + env(safe-area-inset-bottom));background:rgba(11,15,21,.92);backdrop-filter:blur(14px);border-top:1px solid var(--line);align-items:end}
   .bn{display:flex;flex-direction:column;align-items:center;gap:3px;height:52px;justify-content:center;color:var(--dim);font-size:10.5px;font-weight:700;border-radius:12px}
@@ -371,10 +390,12 @@ body.noanim *,body.noanim *::before,body.noanim *::after{animation:none!importan
       <div class="top-r">
         <div id="rangebar" class="chips"></div>
         <button class="btn btn-pri hide-m" data-act="new" id="topnew"></button>
+        <button class="xbtn show-m" data-act="nav" data-view="set" id="topset" aria-label="Ajustes"></button>
       </div>
     </header>
     <section id="v-panel" class="view"></section>
     <section id="v-bit" class="view" hidden></section>
+    <section id="v-opo" class="view" hidden></section>
     <section id="v-ana" class="view" hidden></section>
     <section id="v-set" class="view" hidden></section>
   </main>
@@ -420,7 +441,7 @@ const ic=(n,s=18)=>`<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 2
 
 /* ---------- estado y persistencia ---------- */
 const KEY='tj.v1';
-const DEFAULTS={capital:10000,riskPct:1,maxOpenRisk:5,dailyLoss:3,currency:'USD',anim:true,auto:true,feePct:0,lastBackup:null,
+const DEFAULTS={capital:10000,riskPct:1,maxOpenRisk:5,dailyLoss:3,currency:'USD',anim:true,auto:true,feePct:0,learnCap:600,lastBackup:null,
   strategies:['Breakout','Pullback','Reversal','Rango','Noticias'],symbols:['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','XRP/USDT']};
 const S={trades:[],set:{...DEFAULTS},prev:{},ui:{view:'panel',range:'all',eq:'equity',bar:'usd',limit:60,open:null,fresh:null,
   sort:'new',f:{q:'',status:'all',dir:'all',strat:'all',res:'all'}}};
@@ -667,8 +688,8 @@ function insights(list,base){
 /* =====================================================================
    VISTAS
    ===================================================================== */
-const VIEWS={panel:'Panel',bit:'Bitácora',ana:'Análisis',set:'Ajustes'};
-const NAV=[['panel','panel','Panel'],['bit','list','Bitácora'],['ana','chart','Análisis'],['set','sliders','Ajustes']];
+const VIEWS={panel:'Panel',bit:'Bitácora',opo:'Oportunidades',ana:'Análisis',set:'Ajustes'};
+const NAV=[['panel','panel','Panel'],['bit','list','Bitácora'],['opo','target','Oportunidades'],['ana','chart','Análisis'],['set','sliders','Ajustes']];
 const RANGES=[['all','Todo'],['90','90d'],['30','30d'],['7','7d']];
 
 function render(){
@@ -676,14 +697,14 @@ function render(){
   const v=S.ui.view;
   $$('.view').forEach(x=>x.hidden=x.id!=='v-'+v);
   $('#sidenav').innerHTML=NAV.map(([id,i,l])=>`<button class="nav ${v===id?'on':''}" data-act="nav" data-view="${id}">${ic(i,20)}${l}</button>`).join('');
-  $('#bottomnav').innerHTML=[NAV[0],NAV[1]].map(([id,i,l])=>bn(id,i,l,v)).join('')+`<button class="fab" data-act="new" aria-label="Nuevo trade">${ic('plus',28)}</button>`+[NAV[2],NAV[3]].map(([id,i,l])=>bn(id,i,l,v)).join('');
+  $('#bottomnav').innerHTML=[NAV[0],NAV[1]].map(([id,i,l])=>bn(id,i,l,v)).join('')+`<button class="fab" data-act="new" aria-label="Nuevo trade">${ic('plus',28)}</button>`+[NAV[2],NAV[3]].map(([id,i,l])=>bn(id,i,l,v)).join('');$('#topset').innerHTML=ic('sliders',22);
   $('#sidenew').innerHTML=ic('plus',18)+' Nuevo trade <kbd>N</kbd>';$('#topnew').innerHTML=ic('plus',18)+' Nuevo trade';
   $('#title').textContent=VIEWS[v];
-  $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':'Cuenta, riesgo y datos';
+  $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':v==='opo'?'Señales de compra spot · BTC, ETH, SOL, XRP':'Cuenta, riesgo y datos';
   $('#rangebar').innerHTML=(v==='panel'||v==='ana')&&S.trades.length?RANGES.map(([k,l])=>`<button class="chip ${S.ui.range===k?'on':''}" data-act="range" data-v="${k}">${l}</button>`).join(''):'';
   const eq=equityNow();
   $('#sidefoot').innerHTML=`<div class="lbl">Capital</div><div class="mono" style="font-size:20px;font-weight:800;margin:3px 0 8px">${fmtMoney(eq)}</div><div class="savedot"><i></i>${storageOK?'Guardado en este navegador':'Sin almacenamiento'}</div><div class="syncst"></div>`;
-  ({panel:renderPanel,bit:renderJournal,ana:renderAnalysis,set:renderSettings})[v]();
+  ({panel:renderPanel,bit:renderJournal,opo:renderOpp,ana:renderAnalysis,set:renderSettings})[v]();
   paintLive();paintSync();if(v==='set'&&!SY.user)syncPreload();
   window.scrollTo({top:0});
 }
@@ -866,7 +887,7 @@ function renderSettings(){
   $('#v-set').innerHTML=`<div class="agrid">
    <div class="card rise" id="synccard">${syncCardHtml()}</div>
    <div class="card rise"><div class="card-h"><h3>${ic('wallet',18)} Cuenta y riesgo</h3></div><div class="sgrid">
-     ${nf('Capital inicial','capital')}${nf('Riesgo por trade %','riskPct')}${nf('Riesgo abierto máx %','maxOpenRisk')}${nf('Pérdida diaria máx %','dailyLoss')}${nf('Comisión % por lado','feePct')}
+     ${nf('Capital inicial','capital')}${nf('Riesgo por trade %','riskPct')}${nf('Riesgo abierto máx %','maxOpenRisk')}${nf('Pérdida diaria máx %','dailyLoss')}${nf('Comisión % por lado','feePct')}${nf('Capital de aprendizaje (USD)','learnCap')}
      <label class="fld"><span class="lbl">Moneda</span><select class="inp" data-bind="set" data-k="currency">${['USD','MXN','EUR'].map(c=>`<option ${S.set.currency===c?'selected':''}>${c}</option>`).join('')}</select></label></div></div>
    <div class="card rise" style="--i:1"><div class="card-h"><h3>${ic('target',18)} Estrategias</h3></div><div class="btnrow" style="margin-bottom:12px">${S.set.strategies.map(s=>`<span class="strat-chip">${esc(s)}<button data-act="rmstrat" data-v="${esc(s)}" aria-label="Quitar">${ic('x',13)}</button></span>`).join('')||'<span class="mut">Sin estrategias</span>'}</div>
      <div style="display:flex;gap:8px"><input class="inp" id="newstrat" placeholder="Nueva estrategia" style="font-family:var(--sans)"><button class="btn" data-act="addstrat" style="height:46px">${ic('plus',18)}</button></div></div>
@@ -913,7 +934,7 @@ function validate(d,closed){
 }
 function openTradeForm(src,mode='new'){
   const edit=mode==='edit',s=src||{};
-  const F={id:edit?s.id:uid(),mkt:s.mkt||(S.trades[0]&&S.trades[0].mkt)||'spot',emo:s.emo||'',rating:s.rating||0,autoQty:!edit&&!(mode==='dup'),demo:edit?s.demo:false,mark:edit?s.mark:null};
+  const F={id:edit?s.id:uid(),mkt:s.mkt||(S.trades[0]&&S.trades[0].mkt)||'spot',emo:s.emo||'',rating:s.rating||0,autoQty:!edit&&!(mode==='dup'||mode==='opp'),demo:edit?s.demo:false,mark:edit?s.mark:null};
   const closedInit=edit&&s.exit!=null;
   const v=x=>x==null?'':x;
   const eq=equityNow();
@@ -1174,6 +1195,8 @@ document.addEventListener('click',async ev=>{
     case'rmstrat':S.set.strategies=S.set.strategies.filter(s=>s!==a.dataset.v);save();renderSettings();break;
     case'addstrat':{const i=$('#newstrat'),v=i.value.trim();if(v&&!S.set.strategies.includes(v)){S.set.strategies.push(v);save();renderSettings()}break}
     case'login':signIn();break;
+    case'opp-refresh':oppRefresh(true);break;
+    case'opp-reg':oppRegister(a.dataset.pair);break;
     case'logout':signOutSync();break;
   }
 });
@@ -1556,6 +1579,226 @@ function commit(ops){
     }).finally(()=>{SY.inflight--;paintSync()});
   }
 }
+
+/* =====================================================================
+   OPORTUNIDADES · señales de compra spot con la API pública de Binance
+   Regla 'ema200-pb20-v1' (solo velas de 1 h CERRADAS, determinista):
+     para la vela t se usa SIEMPRE la ventana fija de las 600 velas que terminan en t,
+     así el resultado de una hora no depende de cuándo se calcule.
+     Señal de compra si:  cierre > EMA200  y  mínimo ≤ EMA20 < cierre
+       (el precio retrocede hasta tocar la EMA 20 y cierra de nuevo por encima).
+     Entrada = cierre de t · stop = entrada − 1.5 × ATR14 (Wilder) · objetivo = entrada + 2R.
+     Evaluación: 24 velas siguientes; si en una vela toca stop y objetivo, cuenta stop;
+     si no toca ninguno, se cierra al cierre de la vela 24.
+   Rango 24 h: cierre × exp(± 1.18 × σ72 × √24), σ72 = desv. estándar (n−1) de los
+     últimos 72 retornos logarítmicos de 1 h.
+   Guardado (con sesión): users/{uid}/opps/{PAR_AAAAMMDDHH} una vez por señal, y
+     users/{uid}/meta/opps = {desde, hasta}. Al abrir la pestaña se procesan todas las
+     horas cerradas desde 'hasta' (sin huecos).
+   ===================================================================== */
+/* PENDIENTE al subir OP_RULE a una versión nueva: reiniciar la medición. Si meta/opps.rule !== OP_RULE,
+   empezar con desde = última hora cerrada (no seguir con el desde/hasta de la regla anterior). Las señales
+   viejas se conservan en opps/ pero ya se filtran por 'rule' en el resumen. */
+const OP_PAIRS=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
+const OP_RULE='ema200-pb20-v1',OP_WIN=600,OP_H=24,OP_K=1.18,OP_ATR=1.5,OP_RR=2,HR=36e5;
+const OP={c:{},cur:{},sigs:null,meta:null,busy:false,err:'',hour:0,uid:null,saved:0};
+const opName=p=>p.replace(/USDT$/,'/USDT');
+const opId=(p,t)=>p+'_'+new Date(t).toISOString().slice(0,13).replace(/\D/g,'');
+const opHourStr=t=>new Date(t).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false}).replace('.','');
+
+async function opCandles(pair,from){ /* velas de 1 h cerradas desde `from` */
+  const out=[];let s=from;
+  for(let n=0;n<60;n++){
+    const a=await bget(`/api/v3/klines?symbol=${pair}&interval=1h&startTime=${s}&limit=1000`),now=Date.now();
+    for(const k of a)if(+k[6]<now)out.push({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]});
+    if(a.length<1000)break;s=+a[a.length-1][0]+HR;
+  }
+  return out;
+}
+async function opEnsure(pair,from){
+  let a=OP.c[pair];
+  if(!a||!a.length||a[0].t>from)return OP.c[pair]=await opCandles(pair,from);
+  const more=await opCandles(pair,a[a.length-1].t+HR);
+  if(more.length)a.push(...more);
+  return a;
+}
+function opEval(w){ /* w: exactamente las 600 velas que terminan en la vela evaluada */
+  const n=w.length;
+  const ema=p=>{let e=0;for(let i=0;i<p;i++)e+=w[i].c;e/=p;const k=2/(p+1);for(let i=p;i<n;i++)e=w[i].c*k+e*(1-k);return e};
+  const tr=i=>Math.max(w[i].h-w[i].l,Math.abs(w[i].h-w[i-1].c),Math.abs(w[i].l-w[i-1].c));
+  let atr=0;for(let i=1;i<=14;i++)atr+=tr(i);atr/=14;for(let i=15;i<n;i++)atr=(atr*13+tr(i))/14;
+  const r=[];for(let i=n-72;i<n;i++)r.push(Math.log(w[i].c/w[i-1].c));
+  const m=r.reduce((a,b)=>a+b,0)/r.length,sig=Math.sqrt(r.reduce((a,b)=>a+(b-m)**2,0)/(r.length-1));
+  const e200=ema(200),e20=ema(20),x=w[n-1],band=OP_K*sig*Math.sqrt(OP_H);
+  const o={t:x.t,close:x.c,low:x.l,e20,e200,atr,sig,lo:x.c*Math.exp(-band),hi:x.c*Math.exp(band),signal:x.c>e200&&x.l<=e20&&x.c>e20&&atr>0};
+  if(o.signal){o.entry=x.c;o.stop=x.c-OP_ATR*atr;o.target=x.c+OP_RR*(x.c-o.stop)}
+  return o;
+}
+const opAt=(arr,i)=>i>=OP_WIN-1?opEval(arr.slice(i-OP_WIN+1,i+1)):null;
+function opOutcome(s,arr,idx){ /* qué habría pasado con la señal s */
+  const i0=idx.get(s.t);if(i0==null)return null;
+  for(let j=1;j<=OP_H;j++){
+    const k=arr[i0+j];if(!k)return{st:'open',j:j-1,mark:arr[arr.length-1].c};
+    if(k.l<=s.stop)return{st:'sl',exit:s.stop,r:-1,j};          /* si también tocó el objetivo, cuenta stop */
+    if(k.h>=s.target)return{st:'tp',exit:s.target,r:OP_RR,j};
+  }
+  const k=arr[i0+OP_H];return{st:'exp',exit:k.c,r:(k.c-s.entry)/(s.entry-s.stop),j:OP_H};
+}
+function opSize(entry,stop){ /* riesgo % de Ajustes aplicado al capital de aprendizaje; la posición nunca pasa de ese capital */
+  const fee=(S.set.feePct||0)/100,cap=Math.max(0,+S.set.learnCap||0),riskUsd=cap*(S.set.riskPct||0)/100;
+  const per=(entry-stop)+fee*(entry+stop);
+  let qty=per>0?riskUsd/per:0,capped=false;
+  if(qty*entry>cap){qty=cap/entry;capped=true}
+  return{qty,notional:qty*entry,risk:qty*per,riskUsd,capped};
+}
+const opPnl=(s,exit)=>{const z=opSize(s.entry,s.stop),fee=(S.set.feePct||0)/100;return z.qty*(exit-s.entry)-fee*z.qty*(s.entry+exit)};
+
+/* ---------- carga, señales sin huecos y guardado ---------- */
+async function oppRefresh(force){
+  if(OP.busy)return;
+  let uid=SY.user&&SY.fb?SY.user.uid:null;const hour=Math.floor(Date.now()/HR),uid0=uid;
+  if(!force&&OP.hour===hour&&OP.uid===uid&&!OP.err)return;
+  OP.busy=true;OP.err='';paintOpp();
+  try{
+    let F,root,meta=null,saved=new Map();
+    if(uid){
+      try{
+        F=SY.fb;root=F.fs.doc(F.db,'users',uid);
+        const [ms,qs]=await Promise.all([F.fs.getDoc(F.fs.doc(root,'meta','opps')),F.fs.getDocs(F.fs.collection(root,'opps'))]);
+        meta=ms.exists()?ms.data():null;qs.forEach(d=>saved.set(d.id,d.data()));
+      }catch(e){ /* sin nube: se muestran las tarjetas igual y se guarda en el siguiente intento */
+        console.warn('[TJ] oportunidades: nube',e);uid=null;
+        OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar señales.':'No se pudo leer tu cuenta (sin conexión). Las señales se guardarán en el próximo intento.';
+      }
+    }
+    const lastGuess=(hour-1)*HR;
+    const desde=meta?meta.desde:lastGuess,hasta=meta?meta.hasta:lastGuess-HR;
+    const from=Math.min(desde-OP_H*HR,hasta+HR)-OP_WIN*HR;
+    const arrs=await Promise.all(OP_PAIRS.map(p=>opEnsure(p,from)));
+    const idx={};OP_PAIRS.forEach((p,i)=>{idx[p]=new Map(arrs[i].map((k,j)=>[k.t,j]))});
+    OP_PAIRS.forEach((p,i)=>{OP.cur[p]=opAt(arrs[i],arrs[i].length-1)});
+    if(uid){
+      const L=Math.min(...arrs.map(a=>a[a.length-1].t)),nuevas=[];
+      for(let t=hasta+HR;t<=L;t+=HR)OP_PAIRS.forEach((p,i)=>{
+        const j=idx[p].get(t);if(j==null)return;
+        const e=opAt(arrs[i],j),id=opId(p,t);
+        if(e&&e.signal&&!saved.has(id)){
+          const d={pair:p,t,rule:OP_RULE,entry:e.entry,stop:e.stop,target:e.target,atr:e.atr,e20:e.e20,e200:e.e200,sig:e.sig,lo:e.lo,hi:e.hi};
+          saved.set(id,d);nuevas.push([id,d]);
+        }
+      });
+      const m2={desde,hasta:Math.max(hasta,L),rule:OP_RULE};
+      const moved=!meta||m2.hasta!==meta.hasta;
+      for(let i=0;i<(moved?Math.max(1,nuevas.length):0);i+=400){
+        const b=F.fs.writeBatch(F.db);
+        nuevas.slice(i,i+400).forEach(([id,d])=>b.set(F.fs.doc(root,'opps',id),d));
+        if(i+400>=nuevas.length)b.set(F.fs.doc(root,'meta','opps'),m2);  /* 'hasta' avanza solo junto con el último lote */
+        await b.commit();
+      }
+      OP.meta=m2;OP.saved=nuevas.length;
+      if(nuevas.length)toast(ic('target',16)+` ${nuevas.length} señal${nuevas.length>1?'es':''} nueva${nuevas.length>1?'s':''} guardada${nuevas.length>1?'s':''}`,'up');
+    }else OP.meta=null;
+    OP.sigs=uid?[...saved.values()].filter(d=>d.rule===OP_RULE).sort((a,b)=>b.t-a.t):null;
+    OP.idx=idx;
+  }catch(e){console.warn('[TJ] oportunidades',e);OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar señales.':'No se pudieron cargar los datos ('+(e.code||e.message)+'). Toca «Actualizar» para reintentar.'}
+  OP.hour=hour;OP.uid=uid0;  /* también tras un error: evita reintentos en bucle; «Actualizar» fuerza otro intento */
+  OP.busy=false;
+  if(S.ui.view==='opo')softRender();
+}
+
+/* ---------- resumen: señales, rango 24 h y comprar y mantener ---------- */
+function oppSummary(){
+  if(!OP.meta||!OP.sigs)return null;
+  const fee=(S.set.feePct||0)/100,cap=Math.max(0,+S.set.learnCap||0),rows=[];
+  for(const p of OP_PAIRS){
+    const arr=OP.c[p],idx=OP.idx[p];if(!arr)continue;
+    const sg=OP.sigs.filter(s=>s.pair===p).map(s=>({s,o:opOutcome(s,arr,idx)})).filter(x=>x.o);
+    const done=sg.filter(x=>x.o.st!=='open');
+    const tp=done.filter(x=>x.o.st==='tp').length,sl=done.filter(x=>x.o.st==='sl').length,ex=done.length-tp-sl;
+    const sumR=done.reduce((a,x)=>a+x.o.r,0),usd=done.reduce((a,x)=>a+opPnl(x.s,x.o.exit),0);
+    /* rango: cada hora cerrada desde 'desde' que ya tiene su vela +24 h */
+    let cov=0,nc=0;
+    const i0=idx.get(OP.meta.desde);
+    if(i0!=null)for(let i=Math.max(i0,72);i+OP_H<arr.length;i++){
+      const r=[];for(let j=i-71;j<=i;j++)r.push(Math.log(arr[j].c/arr[j-1].c));
+      const m=r.reduce((a,b)=>a+b,0)/72,sig=Math.sqrt(r.reduce((a,b)=>a+(b-m)**2,0)/71),b=OP_K*sig*Math.sqrt(OP_H),y=arr[i+OP_H].c;
+      nc++;if(y>=arr[i].c*Math.exp(-b)&&y<=arr[i].c*Math.exp(b))cov++;
+    }
+    const first=i0!=null?arr[i0].c:null,last=arr[arr.length-1].c;
+    const bh=first?cap*(1-fee)*(last/first)*(1-fee)-cap:null;
+    rows.push({p,n:sg.length,done:done.length,open:sg.length-done.length,tp,sl,ex,sumR,avgR:done.length?sumR/done.length:null,usd,cov:nc?cov/nc:null,nc,bh,bhPct:first?(last/first-1)*100:null,list:sg});
+  }
+  return rows;
+}
+
+/* ---------- vista ---------- */
+function oppCard(p){
+  const e=OP.cur[p];
+  if(!e)return`<div class="card ocard rise"><div class="oh"><b>${opName(p)}</b></div><div class="empty-sm" style="height:120px">${OP.busy?'Cargando velas…':OP.err?'Sin datos':'—'}</div></div>`;
+  const span=e.hi-e.lo,pos=x=>clamp((x-(e.lo-span*.25))/(span*1.5)*100,0,100);
+  const above=e.close>e.e200,d200=(e.close/e.e200-1)*100;
+  let setup;
+  if(e.signal){
+    const z=opSize(e.entry,e.stop),amb=e.target>e.hi;
+    setup=`<div class="osig buy"><h4>${ic('long',16)} Señal de compra <span class="mut" style="font-weight:600">· vela de las ${opHourStr(e.t)}</span></h4>
+      <div class="orow"><span>Entrada</span><b>${fmtP(e.entry)}</b></div>
+      <div class="orow"><span>Stop (1.5 × ATR)</span><b class="dn">${fmtP(e.stop)}</b></div>
+      <div class="orow"><span>Objetivo (2R)</span><b class="up">${fmtP(e.target)}${amb?' · ambicioso':''}</b></div>
+      <div class="orow"><span>Riesgo/beneficio</span><b>1 : ${OP_RR}</b></div>
+      <div class="orow"><span>Cantidad</span><b>${+z.qty.toPrecision(5)}</b></div>
+      <div class="orow"><span>Valor de la posición</span><b>${fmtMoney(z.notional)}</b></div>
+      <div class="orow"><span>Riesgo si toca el stop</span><b class="dn">${fmtMoney(z.risk)}</b></div>
+      <p class="mut" style="font-size:12px;margin:8px 0 0">${S.set.riskPct}% de riesgo sobre tu capital de aprendizaje (${fmtMoney(+S.set.learnCap||0,false,0)}).${z.capped?` El stop está tan cerca que la posición topa en ese capital: arriesgas ${fmtMoney(z.risk)} en vez de ${fmtMoney(z.riskUsd)}.`:''}</p>
+      ${amb?`<p class="mut" style="font-size:12px;margin:8px 0 0">El objetivo queda por encima del rango esperado a 24 h.</p>`:''}
+      <button class="btn sm" style="margin-top:10px" data-act="opp-reg" data-pair="${p}">${ic('plus',15)} Registrar como trade</button></div>`;
+  }else setup=`<div class="osig"><h4>${ic('shield',16)} Sin setup, fuera del mercado</h4><p class="mut" style="font-size:12px;margin:0">${above?'Precio sobre la EMA 200, pero la última vela no retrocedió a la EMA 20 y cerró por encima.':'Precio por debajo de la EMA 200: la regla solo compra en tendencia alcista.'}</p></div>`;
+  return`<div class="card ocard rise"><div class="oh"><b>${opName(p)}</b><span class="mono">${fmtP(e.close)}</span></div>
+    <div class="orow"><span>Última vela cerrada</span><b>${opHourStr(e.t)}</b></div>
+    <div class="orow"><span>EMA 200 (1 h)</span><b class="${above?'up':'dn'}">${fmtP(e.e200)} · ${above?'precio arriba':'precio abajo'} ${d200>=0?'+':''}${d200.toFixed(2)}%</b></div>
+    <div class="orow"><span>EMA 20 (1 h)</span><b>${fmtP(e.e20)}</b></div>
+    <div class="orow"><span>Rango esperado 24 h (~80 %)</span><b>${fmtP(e.lo)} – ${fmtP(e.hi)}</b></div>
+    <div class="oband" title="Rango esperado a 24 h"><em style="left:${pos(e.lo)}%;width:${pos(e.hi)-pos(e.lo)}%"></em><i style="left:calc(${pos(e.close)}% - 1px)"></i></div>
+    ${setup}</div>`;
+}
+function oppHistoryHtml(rows){
+  const st={tp:['Objetivo','up'],sl:['Stop','dn'],exp:['Venció 24 h',''],open:['Abierta','']};
+  const all=rows.flatMap(r=>r.list).sort((a,b)=>b.s.t-a.s.t).slice(0,30);
+  if(!all.length)return'<p class="mut" style="margin:0">Aún no hay señales desde que empezó la medición.</p>';
+  return`<div class="oscroll"><table class="otable"><tr><th>Hora</th><th>Par</th><th>Entrada</th><th>Stop</th><th>Objetivo</th><th>Resultado</th><th>R</th><th>${cur()}</th></tr>
+  ${all.map(({s,o})=>{const [l,c]=st[o.st],v=o.st==='open'?null:opPnl(s,o.exit);
+    return`<tr><td>${opHourStr(s.t)}</td><td>${opName(s.pair).replace('/USDT','')}</td><td>${fmtP(s.entry)}</td><td>${fmtP(s.stop)}</td><td>${fmtP(s.target)}</td><td class="${c}">${l}${o.st==='open'?` · ${o.j}/24 h`:''}</td><td class="${cls(o.r)}">${o.st==='open'?'—':fmtR(o.r)}</td><td class="${cls(v)}">${v==null?'—':fmtMoney(v,true)}</td></tr>`}).join('')}</table></div>`;
+}
+function oppSummaryHtml(){
+  if(!SY.user)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><p class="mut" style="margin:0 0 14px">Inicia sesión para guardar cada señal en tu cuenta y medir después cómo le fue frente a comprar y mantener.</p><button class="btn btn-pri" data-act="login">Iniciar sesión con Google</button></div>`;
+  const rows=oppSummary();
+  if(!rows)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><div class="empty-sm" style="height:80px">${OP.busy?'Cargando tus señales…':'—'}</div></div>`;
+  const T=rows.reduce((a,r)=>({done:a.done+r.done,tp:a.tp+r.tp,sumR:a.sumR+r.sumR,usd:a.usd+r.usd,bh:a.bh+(r.bh||0)}),{done:0,tp:0,sumR:0,usd:0,bh:0});
+  const pct=v=>v==null?'—':(v*100).toFixed(0)+'%';
+  return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3><span class="mut" style="font-size:12px">desde ${opHourStr(OP.meta.desde)}</span></div>
+  <div class="oscroll"><table class="otable"><tr><th>Par</th><th>Señales</th><th>Cerradas</th><th>Ganadas</th><th>R prom.</th><th>Resultado ${cur()}</th><th>Comprar y mantener</th><th>Rango 24 h dentro</th></tr>
+  ${rows.map(r=>`<tr><td>${opName(r.p).replace('/USDT','')}</td><td>${r.n}</td><td>${r.done}${r.open?` (+${r.open})`:''}</td><td>${r.done?pct(r.tp/r.done):'—'}</td><td class="${cls(r.avgR)}">${fmtR(r.avgR)}</td><td class="${cls(r.usd)}">${r.done?fmtMoney(r.usd,true):'—'}</td><td class="${cls(r.bh)}">${r.bh==null?'—':fmtMoney(r.bh,true)+` (${r.bhPct>=0?'+':''}${r.bhPct.toFixed(1)}%)`}</td><td>${r.nc?pct(r.cov)+` <span class="mut">de ${r.nc} h</span>`:'—'}</td></tr>`).join('')}
+  <tr><td><b>Total</b></td><td></td><td>${T.done}</td><td>${T.done?pct(T.tp/T.done):'—'}</td><td class="${cls(T.sumR)}">${T.done?fmtR(T.sumR/T.done):'—'}</td><td class="${cls(T.usd)}">${T.done?fmtMoney(T.usd,true):'—'}</td><td class="${cls(T.bh)}">${fmtMoney(T.bh,true)} <span class="mut">(×4)</span></td><td></td></tr></table></div>
+  <p class="mut" style="font-size:12px;margin:10px 0 0">Cada señal arriesga tu % de riesgo de Ajustes sobre el capital de aprendizaje (${fmtMoney(+S.set.learnCap||0,false,0)}), sin pasar de ese capital; incluye comisiones. "Comprar y mantener" invierte ese mismo capital en cada moneda desde el inicio de la medición. Una señal puede empezar mientras otra sigue abierta.${T.done<30?` <b>Con ${T.done} señal${T.done===1?'':'es'} cerrada${T.done===1?'':'s'} todavía no se puede concluir nada.</b>`:''}</p>
+  <div class="card-h" style="margin-top:18px"><h3>${ic('list',18)} Últimas señales</h3></div>${oppHistoryHtml(rows)}</div>`;
+}
+function paintOpp(){if(S.ui.view==='opo'){const h=$('#oppstat');if(h)h.innerHTML=oppStatus()}}
+const oppStatus=()=>OP.busy?'Actualizando…':OP.err?`<span class="dn">${esc(OP.err)}</span>`:OP.hour?`Velas de 1 h cerradas · Binance · ${OP.uid?'señales guardadas en tu cuenta':'sin sesión: no se guarda'}`:'';
+function renderOpp(){
+  const el=$('#v-opo');
+  el.innerHTML=`<div class="card rise" style="margin-bottom:14px"><div class="card-h"><h3>${ic('target',18)} Regla: retroceso a la EMA 20 en tendencia</h3><button class="btn sm" data-act="opp-refresh" ${OP.busy?'disabled':''}>${ic('pulse',15)} Actualizar</button></div>
+    <p class="mut" style="margin:0 0 6px;font-size:13px">Solo compras (spot). Hay señal cuando, en velas de 1 hora, el precio está sobre la EMA 200, retrocede hasta tocar la EMA 20 y cierra de nuevo por encima. Stop a 1.5 × ATR(14), objetivo a 2R. Es una regla para medir, no una recomendación.</p>
+    <div class="mut" style="font-size:12px" id="oppstat">${oppStatus()}</div></div>
+    <div class="ogrid">${OP_PAIRS.map(oppCard).join('')}</div>${oppSummaryHtml()}`;
+  const uid=SY.user&&SY.fb?SY.user.uid:null;
+  if(!OP.busy&&(OP.hour!==Math.floor(Date.now()/HR)||OP.uid!==uid))setTimeout(()=>oppRefresh(),0);
+}
+function oppRegister(p){
+  const e=OP.cur[p];if(!e||!e.signal)return;
+  const z=opSize(e.entry,e.stop);
+  openTradeForm({symbol:opName(p),dir:'long',mkt:'spot',strat:'Pullback EMA20',entry:+e.entry.toPrecision(8),sl:+e.stop.toPrecision(8),tp:+e.target.toPrecision(8),qty:+z.qty.toPrecision(6),
+    notes:`Señal Oportunidades (${OP_RULE}) de la vela de las ${opHourStr(e.t)}`},'opp');
+}
+setInterval(()=>{if(S.ui.view==='opo'&&!document.hidden&&!OP.busy&&OP.hour!==Math.floor(Date.now()/HR))oppRefresh()},60000);
 
 /* ---------- arranque ---------- */
 load();
