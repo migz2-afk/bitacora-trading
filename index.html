@@ -349,6 +349,8 @@ body.noanim *,body.noanim *::before,body.noanim *::after{animation:none!importan
   .main{padding:16px 14px calc(104px + env(safe-area-inset-bottom))}
   .hide-m{display:none!important}
   .show-m{display:grid!important}
+  .top{position:relative}.top>div:first-child{padding-right:46px}
+  #topset{position:absolute;top:0;right:0}
   .top{margin-bottom:14px}
   .bottom{display:grid;grid-template-columns:1fr 1fr 74px 1fr 1fr;position:fixed;left:0;right:0;bottom:0;z-index:40;padding:6px 6px calc(8px + env(safe-area-inset-bottom));background:rgba(11,15,21,.92);backdrop-filter:blur(14px);border-top:1px solid var(--line);align-items:end}
   .bn{display:flex;flex-direction:column;align-items:center;gap:3px;height:52px;justify-content:center;color:var(--dim);font-size:10.5px;font-weight:700;border-radius:12px}
@@ -700,7 +702,7 @@ function render(){
   $('#bottomnav').innerHTML=[NAV[0],NAV[1]].map(([id,i,l])=>bn(id,i,l,v)).join('')+`<button class="fab" data-act="new" aria-label="Nuevo trade">${ic('plus',28)}</button>`+[NAV[2],NAV[3]].map(([id,i,l])=>bn(id,i,l,v)).join('');$('#topset').innerHTML=ic('sliders',22);
   $('#sidenew').innerHTML=ic('plus',18)+' Nuevo trade <kbd>N</kbd>';$('#topnew').innerHTML=ic('plus',18)+' Nuevo trade';
   $('#title').textContent=VIEWS[v];
-  $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':v==='opo'?'Señales de compra spot · BTC, ETH, SOL, XRP':'Cuenta, riesgo y datos';
+  $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':v==='opo'?'Regla d4h-v2 · BTC, ETH, SOL, XRP · velas de 4 h':'Cuenta, riesgo y datos';
   $('#rangebar').innerHTML=(v==='panel'||v==='ana')&&S.trades.length?RANGES.map(([k,l])=>`<button class="chip ${S.ui.range===k?'on':''}" data-act="range" data-v="${k}">${l}</button>`).join(''):'';
   const eq=equityNow();
   $('#sidefoot').innerHTML=`<div class="lbl">Capital</div><div class="mono" style="font-size:20px;font-weight:800;margin:3px 0 8px">${fmtMoney(eq)}</div><div class="savedot"><i></i>${storageOK?'Guardado en este navegador':'Sin almacenamiento'}</div><div class="syncst"></div>`;
@@ -1242,15 +1244,30 @@ const IVS=[['1m',6e4],['5m',3e5],['15m',9e5],['1h',36e5]];
 let host=0;const live={ok:null,busy:false};
 const pairOf=sym=>{const s=String(sym).toUpperCase().replace(/[^A-Z0-9]/g,'');return/(USDT|USDC|BUSD|FDUSD)$/.test(s)?s:s+'USDT'};
 const canAuto=t=>t.exit==null&&!t.verify&&t.sl!==t.entry&&!t.noFeed;
+/* Límite de Binance: 429 = demasiadas peticiones; 418 = IP bloqueada por seguir pidiendo tras un 429.
+   Cualquiera de los dos detiene TODAS las consultas (precios en vivo y Oportunidades) durante una pausa
+   creciente, porque insistir alarga el bloqueo. Ojo: el 418 de data-api.binance.vision llega sin cabecera
+   CORS y el navegador solo ve "Failed to fetch"; por eso api.binance.com va primero. */
+const NET={hasta:0,n:0,codigo:0};
+const netPausa=()=>Math.max(0,NET.hasta-Date.now());
 async function bget(path){
+  if(netPausa())throw Object.assign(new Error('pausa'),{limite:true,codigo:NET.codigo});
   let err;
   for(let k=0;k<HOSTS.length;k++){
-    const i=(host+k)%HOSTS.length;
-    try{const r=await fetch(HOSTS[i]+path,{cache:'no-store'});
-      if(r.status===400)throw new Error('400');
-      if(!r.ok){err=new Error('http '+r.status);continue}
-      host=i;return await r.json()}
-    catch(e){if(e.message==='400')throw e;err=e}}
+    const i=(host+k)%HOSTS.length;let r;
+    try{r=await fetch(HOSTS[i]+path,{cache:'no-store'})}
+    catch(e){err=e;continue}  /* red caída o respuesta sin CORS: probar el otro servidor */
+    if(r.status===400)throw new Error('400');
+    if(r.status===429||r.status===418){
+      NET.n++;NET.codigo=r.status;
+      const espera=+r.headers.get('Retry-After')||0,base=r.status===418?5:1,tope=r.status===418?60:30;
+      NET.hasta=Date.now()+Math.max(espera*1000,Math.min(tope,base*2**(NET.n-1))*60e3);
+      console.warn(`[TJ] Binance respondió ${r.status}: se pausan las consultas ${Math.round(netPausa()/6e4)} min`);
+      throw Object.assign(new Error('límite '+r.status),{limite:true,codigo:r.status});
+    }
+    if(!r.ok){err=new Error('http '+r.status);continue}
+    NET.n=0;host=i;return await r.json();
+  }
   throw err||new Error('red');
 }
 async function klines(pair,from,iv,to){
@@ -1291,7 +1308,7 @@ function paintLive(){
   const n=S.trades.filter(t=>t.exit==null).length;
   if(S.set.auto===false||!n){el.className='';el.innerHTML='';return}
   el.className='livechip '+(live.ok===true?'on':live.ok===false?'off':'');
-  el.innerHTML='<i></i>'+(live.ok===true?'En vivo · auto-cierre activo':live.ok===false?'Sin conexión a precios · reintentando':'Conectando…');
+  el.innerHTML='<i></i>'+(live.ok===true?'En vivo · auto-cierre activo':live.ok===false?(netPausa()?`Binance limitó las consultas · reanuda en ${Math.ceil(netPausa()/6e4)} min`:'Sin conexión a precios · reintentando'):'Conectando…');
 }
 async function liveTick(){
   if(S.set.auto===false)return;
@@ -1581,224 +1598,240 @@ function commit(ops){
 }
 
 /* =====================================================================
-   OPORTUNIDADES · señales de compra spot con la API pública de Binance
-   Regla 'ema200-pb20-v1' (solo velas de 1 h CERRADAS, determinista):
-     para la vela t se usa SIEMPRE la ventana fija de las 600 velas que terminan en t,
-     así el resultado de una hora no depende de cuándo se calcule.
-     Señal de compra si:  cierre > EMA200  y  mínimo ≤ EMA20 < cierre
-       (el precio retrocede hasta tocar la EMA 20 y cierra de nuevo por encima).
-     Entrada = cierre de t · stop = entrada − 1.5 × ATR14 (Wilder) · objetivo = entrada + 2R.
-     Evaluación: 24 velas siguientes; si en una vela toca stop y objetivo, cuenta stop;
-     si no toca ninguno, se cierra al cierre de la vela 24.
-   Rango 24 h: cierre × exp(± 1.18 × σ72 × √24), σ72 = desv. estándar (n−1) de los
-     últimos 72 retornos logarítmicos de 1 h.
-   Guardado (con sesión): users/{uid}/opps/{PAR_AAAAMMDDHH} una vez por señal, y
-     users/{uid}/meta/opps = {desde, hasta}. Al abrir la pestaña se procesan todas las
-     horas cerradas desde 'hasta' (sin huecos).
+   OPORTUNIDADES · regla 'd4h-v2' (solo compras spot) con la API pública de Binance
+   Idéntica a la variante D4h de kronos-lab/fase2.py:
+     velas de 4 h CERRADAS de BTC, ETH, SOL y XRP; un trade a la vez por moneda.
+     Entrada: cierre > máximo de las 20 velas anteriores y cierre > EMA200 → compra en la apertura siguiente.
+     Salida: cierre < mínimo de las 10 velas anteriores → vende en la apertura siguiente; o stop inicial
+       fijo = entrada − 3×ATR14 (ATR de la vela de la señal), revisado dentro de cada vela desde la de
+       entrada; si una vela abre bajo el stop, sale a esa apertura. Sin objetivo fijo.
+     Precios con 0.05 % de deslizamiento por lado (como el backtest) + la comisión de Ajustes.
+   EMA200 y ATR14 en una ventana fija de 1,500 velas que termina en cada vela: determinista y
+     verificado contra el cálculo continuo de fase2.py (mismas señales en los 3 años de datos).
+   Medición (con sesión): meta/opps-d4h-v2 = {desde, rule} (la de v1, meta/opps, no se toca).
+     Desde 'desde' la app recorre las velas cerradas en orden y guarda cada entrada y cada salida una
+     vez en opps/d4h-v2_{PAR}_{AAAAMMDDHH de la entrada}. El estado arranca 300 velas antes de 'desde'
+     para que tarjetas y medición coincidan; solo cuentan los trades cuya SEÑAL es desde 'desde'.
+     Las señales de v1 se conservan en opps/ con rule 'ema200-pb20-v1'.
    ===================================================================== */
-/* PENDIENTE al subir OP_RULE a una versión nueva: reiniciar la medición. Si meta/opps.rule !== OP_RULE,
-   empezar con desde = última hora cerrada (no seguir con el desde/hasta de la regla anterior). Las señales
-   viejas se conservan en opps/ pero ya se filtran por 'rule' en el resumen. */
 const OP_PAIRS=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
-const OP_RULE='ema200-pb20-v1',OP_WIN=600,OP_H=24,OP_K=1.18,OP_ATR=1.5,OP_RR=2,HR=36e5;
-const OP={c:{},cur:{},sigs:null,meta:null,busy:false,err:'',hour:0,uid:null,saved:0};
+const OP_RULE='d4h-v2',OP_META='opps-d4h-v2',OP_TF=4*36e5,OP_WIN=1500,OP_WARM=300,OP_K=3,OP_ENTN=20,OP_EXN=10,OP_SLIP=0.0005;
+const OP={st:{},trades:null,meta:null,busy:false,err:'',slot:0,uid:null,okAt:0,retry:0};
 const opName=p=>p.replace(/USDT$/,'/USDT');
-const opId=(p,t)=>p+'_'+new Date(t).toISOString().slice(0,13).replace(/\D/g,'');
+const opId=(p,t)=>OP_RULE+'_'+p+'_'+new Date(t).toISOString().slice(0,13).replace(/\D/g,'');
 const opHourStr=t=>new Date(t).toLocaleString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',hour12:false}).replace('.','');
+const opFee=()=>(S.set.feePct||0)/100;
 
-async function opCandles(pair,from){ /* velas de 1 h cerradas desde `from` */
-  const out=[];let s=from;
-  for(let n=0;n<60;n++){
-    const a=await bget(`/api/v3/klines?symbol=${pair}&interval=1h&startTime=${s}&limit=1000`),now=Date.now();
-    for(const k of a)if(+k[6]<now)out.push({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]});
-    if(a.length<1000)break;s=+a[a.length-1][0]+HR;
+async function opGet(path){ /* fallas de red: reintenta con espera creciente (1, 3 y 9 s) y ambos servidores; ante un límite, no insiste */
+  let e;
+  for(let n=0;n<4;n++){
+    try{return await bget(path)}
+    catch(x){e=x;if(x.limite||x.message==='400')throw x;if(n<3)await new Promise(r=>setTimeout(r,1000*3**n))}
   }
+  throw e;
+}
+async function opCandles(pair,from){ /* velas de 4 h cerradas desde `from` + la vela en formación (solo su apertura) */
+  const arr=[];let s=from,live=null;
+  for(let n=0;n<80;n++){
+    const a=await opGet(`/api/v3/klines?symbol=${pair}&interval=4h&startTime=${s}&limit=1000`),now=Date.now();
+    for(const k of a){if(+k[6]<now)arr.push({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4]});else live={t:+k[0],o:+k[1]}}
+    if(a.length<1000)break;s=+a[a.length-1][0]+OP_TF;
+  }
+  return{arr,live};
+}
+const OPC={}; /* velas de 4 h en memoria por par: {arr, live, slot} */
+async function opData(pair,from,force){
+  const slot=Math.floor(Date.now()/OP_TF),c=OPC[pair];
+  if(c&&c.arr.length&&c.arr[0].t<=from){
+    if(c.slot===slot&&!force)return c;                          /* ninguna vela nueva: no se consulta */
+    const ult=c.arr[c.arr.length-1].t,r=await opCandles(pair,ult+OP_TF); /* solo las velas nuevas */
+    c.arr.push(...r.arr.filter(k=>k.t>ult));if(r.live)c.live=r.live;c.slot=slot;
+    return c;
+  }
+  const r=await opCandles(pair,from);
+  return OPC[pair]={arr:r.arr,live:r.live,slot};
+}
+/* ---------- indicadores (misma fórmula que fase2.py, en ventana fija) ---------- */
+function opInd(arr,i){
+  const s=i-OP_WIN+1;if(s<0)return null;
+  let e=0;for(let j=s;j<s+200;j++)e+=arr[j].c;e/=200;const k=2/201;for(let j=s+200;j<=i;j++)e=arr[j].c*k+e*(1-k);
+  const tr=j=>Math.max(arr[j].h-arr[j].l,Math.abs(arr[j].h-arr[j-1].c),Math.abs(arr[j].l-arr[j-1].c));
+  let a=0;for(let j=s+1;j<=s+14;j++)a+=tr(j);a/=14;for(let j=s+15;j<=i;j++)a=(a*13+tr(j))/14;
+  return{e200:e,atr:a};
+}
+const opHi=(arr,i)=>{let m=-Infinity;for(let j=i-OP_ENTN;j<i;j++)m=Math.max(m,arr[j].h);return m}; /* máx. de las 20 anteriores */
+const opLo=(arr,i)=>{let m=Infinity;for(let j=i-OP_EXN;j<i;j++)m=Math.min(m,arr[j].l);return m};   /* mín. de las 10 anteriores */
+function opEntry(arr,i){ /* señal de entrada al cierre de la vela i (o null) */
+  if(i<OP_WIN-1||i<OP_ENTN||!(arr[i].c>opHi(arr,i)))return null;
+  const x=opInd(arr,i);return x&&arr[i].c>x.e200?x:null;
+}
+/* ---------- simulación determinista (espejo de fase2.simular para una moneda) ---------- */
+function opRun(arr,i0,live,fee){
+  const trades=[];let pos=null,pend=null,sal=false;
+  const cerrar=(px,t,tipo)=>{const ps=px*(1-OP_SLIP);trades.push({...pos,tSal:t,ps,tipo,r:((ps-pos.pe)-fee*(pos.pe+ps))/(pos.pe-pos.stop)});pos=null};
+  const abrir=(o,t)=>{const pe=o*(1+OP_SLIP),stop=pe-OP_K*pend.atr;if(pe>stop)pos={tSig:pend.t,tEnt:t,pe,stop,atr:pend.atr};pend=null};
+  for(let i=Math.max(0,i0);i<arr.length;i++){
+    const k=arr[i];
+    if(sal&&pos){cerrar(k.o,k.t,'salida');sal=false}
+    if(pend&&!pos)abrir(k.o,k.t);
+    if(pos){
+      if(k.l<=pos.stop){const gap=k.t!==pos.tEnt&&k.o<=pos.stop;cerrar(gap?k.o:pos.stop,k.t,gap?'stop (hueco)':'stop')}
+      else if(i>=OP_EXN&&k.c<opLo(arr,i))sal=true;
+    }
+    if(!pos&&!pend&&(i+1<arr.length||live)){const s=opEntry(arr,i);if(s)pend={t:k.t,atr:s.atr}}
+  }
+  if(live){ /* lo pendiente se ejecuta en la apertura de la vela en formación (ya conocida) */
+    if(sal&&pos){cerrar(live.o,live.t,'salida');sal=false}
+    if(pend&&!pos)abrir(live.o,live.t);
+  }
+  return{trades,pos,pend};
+}
+/* ---------- tamaño: % de riesgo de Ajustes sobre el capital de aprendizaje; la suma abierta ≤ ese capital ---------- */
+function opSize(pe,stop,used=0){
+  const fee=opFee(),cap=Math.max(0,+S.set.learnCap||0),riskUsd=cap*(S.set.riskPct||0)/100,per=(pe-stop)+fee*(pe+stop);
+  let qty=per>0?riskUsd/per:0,capped=false;const room=Math.max(0,cap-used);
+  if(qty*pe>room){qty=room/pe;capped=true}
+  return{qty,notional:qty*pe,risk:qty*per,riskUsd,capped};
+}
+function opSizing(list){ /* tamaño de cada trade en orden de entrada, con el tope sobre lo que ya está abierto */
+  const out=new Map(),ord=[...list].sort((a,b)=>a.tEnt-b.tEnt||OP_PAIRS.indexOf(a.pair)-OP_PAIRS.indexOf(b.pair));
+  ord.forEach((t,n)=>{
+    const used=ord.slice(0,n).filter(u=>u.tSal==null||u.tSal>t.tEnt).reduce((a,u)=>a+out.get(u).notional,0);
+    out.set(t,opSize(t.pe,t.stop,used));
+  });
   return out;
 }
-async function opEnsure(pair,from){
-  let a=OP.c[pair];
-  if(!a||!a.length||a[0].t>from)return OP.c[pair]=await opCandles(pair,from);
-  const more=await opCandles(pair,a[a.length-1].t+HR);
-  if(more.length)a.push(...more);
-  return a;
-}
-function opEval(w){ /* w: exactamente las 600 velas que terminan en la vela evaluada */
-  const n=w.length;
-  const ema=p=>{let e=0;for(let i=0;i<p;i++)e+=w[i].c;e/=p;const k=2/(p+1);for(let i=p;i<n;i++)e=w[i].c*k+e*(1-k);return e};
-  const tr=i=>Math.max(w[i].h-w[i].l,Math.abs(w[i].h-w[i-1].c),Math.abs(w[i].l-w[i-1].c));
-  let atr=0;for(let i=1;i<=14;i++)atr+=tr(i);atr/=14;for(let i=15;i<n;i++)atr=(atr*13+tr(i))/14;
-  const r=[];for(let i=n-72;i<n;i++)r.push(Math.log(w[i].c/w[i-1].c));
-  const m=r.reduce((a,b)=>a+b,0)/r.length,sig=Math.sqrt(r.reduce((a,b)=>a+(b-m)**2,0)/(r.length-1));
-  const e200=ema(200),e20=ema(20),x=w[n-1],band=OP_K*sig*Math.sqrt(OP_H);
-  const o={t:x.t,close:x.c,low:x.l,e20,e200,atr,sig,lo:x.c*Math.exp(-band),hi:x.c*Math.exp(band),signal:x.c>e200&&x.l<=e20&&x.c>e20&&atr>0};
-  if(o.signal){o.entry=x.c;o.stop=x.c-OP_ATR*atr;o.target=x.c+OP_RR*(x.c-o.stop)}
-  return o;
-}
-const opAt=(arr,i)=>i>=OP_WIN-1?opEval(arr.slice(i-OP_WIN+1,i+1)):null;
-function opOutcome(s,arr,idx){ /* qué habría pasado con la señal s */
-  const i0=idx.get(s.t);if(i0==null)return null;
-  for(let j=1;j<=OP_H;j++){
-    const k=arr[i0+j];if(!k)return{st:'open',j:j-1,mark:arr[arr.length-1].c};
-    if(k.l<=s.stop)return{st:'sl',exit:s.stop,r:-1,j};          /* si también tocó el objetivo, cuenta stop */
-    if(k.h>=s.target)return{st:'tp',exit:s.target,r:OP_RR,j};
-  }
-  const k=arr[i0+OP_H];return{st:'exp',exit:k.c,r:(k.c-s.entry)/(s.entry-s.stop),j:OP_H};
-}
-function opSize(entry,stop){ /* riesgo % de Ajustes aplicado al capital de aprendizaje; la posición nunca pasa de ese capital */
-  const fee=(S.set.feePct||0)/100,cap=Math.max(0,+S.set.learnCap||0),riskUsd=cap*(S.set.riskPct||0)/100;
-  const per=(entry-stop)+fee*(entry+stop);
-  let qty=per>0?riskUsd/per:0,capped=false;
-  if(qty*entry>cap){qty=cap/entry;capped=true}
-  return{qty,notional:qty*entry,risk:qty*per,riskUsd,capped};
-}
-const opPnl=(s,exit)=>{const z=opSize(s.entry,s.stop),fee=(S.set.feePct||0)/100;return z.qty*(exit-s.entry)-fee*z.qty*(s.entry+exit)};
+const opUsd=(t,z,exit)=>z.qty*(exit-t.pe)-opFee()*z.qty*(t.pe+exit);
 
-/* ---------- carga, señales sin huecos y guardado ---------- */
+/* ---------- carga, medición sin huecos y guardado ---------- */
 async function oppRefresh(force){
   if(OP.busy)return;
-  let uid=SY.user&&SY.fb?SY.user.uid:null;const hour=Math.floor(Date.now()/HR),uid0=uid;
-  if(!force&&OP.hour===hour&&OP.uid===uid&&!OP.err)return;
+  let uid=SY.user&&SY.fb?SY.user.uid:null;const slot=Math.floor(Date.now()/OP_TF),uid0=uid;
+  if(!force&&OP.slot===slot&&OP.uid===uid&&!OP.err)return;
   OP.busy=true;OP.err='';paintOpp();
   try{
     let F,root,meta=null,saved=new Map();
     if(uid){
       try{
         F=SY.fb;root=F.fs.doc(F.db,'users',uid);
-        const [ms,qs]=await Promise.all([F.fs.getDoc(F.fs.doc(root,'meta','opps')),F.fs.getDocs(F.fs.collection(root,'opps'))]);
-        meta=ms.exists()?ms.data():null;qs.forEach(d=>saved.set(d.id,d.data()));
-      }catch(e){ /* sin nube: se muestran las tarjetas igual y se guarda en el siguiente intento */
-        console.warn('[TJ] oportunidades: nube',e);uid=null;
-        OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar señales.':'No se pudo leer tu cuenta (sin conexión). Las señales se guardarán en el próximo intento.';
-      }
+        const [ms,qs]=await Promise.all([F.fs.getDoc(F.fs.doc(root,'meta',OP_META)),F.fs.getDocs(F.fs.collection(root,'opps'))]);
+        meta=ms.exists()?ms.data():null;qs.forEach(d=>{const x=d.data();if(x.rule===OP_RULE)saved.set(d.id,x)});
+      }catch(e){console.warn('[TJ] oportunidades: nube',e);uid=null;
+        OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar la medición.':'No se pudo leer tu cuenta (sin conexión). La medición se guardará en el próximo intento.'}
     }
-    const lastGuess=(hour-1)*HR;
-    const desde=meta?meta.desde:lastGuess,hasta=meta?meta.hasta:lastGuess-HR;
-    const from=Math.min(desde-OP_H*HR,hasta+HR)-OP_WIN*HR;
-    const arrs=await Promise.all(OP_PAIRS.map(p=>opEnsure(p,from)));
-    const idx={};OP_PAIRS.forEach((p,i)=>{idx[p]=new Map(arrs[i].map((k,j)=>[k.t,j]))});
-    OP_PAIRS.forEach((p,i)=>{OP.cur[p]=opAt(arrs[i],arrs[i].length-1)});
+    const desde=meta?meta.desde:slot*OP_TF; /* nueva medición: empieza con la vela de 4 h en curso */
+    const ini=desde-OP_WARM*OP_TF;
+    const data=await Promise.all(OP_PAIRS.map(p=>opData(p,ini-(OP_WIN+OP_ENTN)*OP_TF,force)));
+    const fee=opFee(),todos=[],st={};
+    OP_PAIRS.forEach((p,n)=>{
+      const {arr,live}=data[n],last=arr.length-1;
+      const i0=arr.findIndex(k=>k.t>=ini),run=opRun(arr,i0,live,fee);
+      const medidos=[...run.trades,...(run.pos?[run.pos]:[])].filter(t=>t.tSig>=desde).map(t=>({...t,pair:p})); /* cuentan las señales desde el inicio de la medición */
+      todos.push(...medidos);
+      const prev=run.trades[run.trades.length-1];
+      st[p]={last:arr[last],live,pos:run.pos?{...run.pos,pair:p}:null,pend:run.pend,ind:opInd(arr,last),
+        hi:opHi(arr,last+1),lo:opLo(arr,last+1),prev:prev&&prev.tSal>=arr[last].t?{...prev,pair:p}:null};
+    });
+    OP.st=st;OP.okAt=Date.now();  /* solo se reemplazan los datos cuando las 4 monedas cargaron bien */
     if(uid){
-      const L=Math.min(...arrs.map(a=>a[a.length-1].t)),nuevas=[];
-      for(let t=hasta+HR;t<=L;t+=HR)OP_PAIRS.forEach((p,i)=>{
-        const j=idx[p].get(t);if(j==null)return;
-        const e=opAt(arrs[i],j),id=opId(p,t);
-        if(e&&e.signal&&!saved.has(id)){
-          const d={pair:p,t,rule:OP_RULE,entry:e.entry,stop:e.stop,target:e.target,atr:e.atr,e20:e.e20,e200:e.e200,sig:e.sig,lo:e.lo,hi:e.hi};
-          saved.set(id,d);nuevas.push([id,d]);
-        }
-      });
-      const m2={desde,hasta:Math.max(hasta,L),rule:OP_RULE};
-      const moved=!meta||m2.hasta!==meta.hasta;
-      for(let i=0;i<(moved?Math.max(1,nuevas.length):0);i+=400){
-        const b=F.fs.writeBatch(F.db);
-        nuevas.slice(i,i+400).forEach(([id,d])=>b.set(F.fs.doc(root,'opps',id),d));
-        if(i+400>=nuevas.length)b.set(F.fs.doc(root,'meta','opps'),m2);  /* 'hasta' avanza solo junto con el último lote */
-        await b.commit();
+      const writes=[];
+      if(!meta)writes.push([F.fs.doc(root,'meta',OP_META),{desde,rule:OP_RULE}]);
+      for(const t of todos){
+        const id=opId(t.pair,t.tEnt),s=saved.get(id);
+        const ent={pair:t.pair,rule:OP_RULE,tSig:t.tSig,tEnt:t.tEnt,pe:t.pe,stop:t.stop,atr:t.atr};
+        const doc=t.tSal!=null?{...ent,tSal:t.tSal,ps:t.ps,tipo:t.tipo,r:t.r}:ent;
+        if(!s||(t.tSal!=null&&s.tSal==null))writes.push([F.fs.doc(root,'opps',id),doc]); /* una vez la entrada, una vez la salida */
       }
-      OP.meta=m2;OP.saved=nuevas.length;
-      if(nuevas.length)toast(ic('target',16)+` ${nuevas.length} señal${nuevas.length>1?'es':''} nueva${nuevas.length>1?'s':''} guardada${nuevas.length>1?'s':''}`,'up');
-    }else OP.meta=null;
-    OP.sigs=uid?[...saved.values()].filter(d=>d.rule===OP_RULE).sort((a,b)=>b.t-a.t):null;
-    OP.idx=idx;
-  }catch(e){console.warn('[TJ] oportunidades',e);OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar señales.':'No se pudieron cargar los datos ('+(e.code||e.message)+'). Toca «Actualizar» para reintentar.'}
-  OP.hour=hour;OP.uid=uid0;  /* también tras un error: evita reintentos en bucle; «Actualizar» fuerza otro intento */
+      for(let i=0;i<writes.length;i+=400){const b=F.fs.writeBatch(F.db);writes.slice(i,i+400).forEach(([r,d])=>b.set(r,d));await b.commit()}
+      const ev=writes.length-(meta?0:1);
+      if(ev>0&&meta)toast(ic('target',16)+` ${ev} evento${ev>1?'s':''} nuevo${ev>1?'s':''} de la regla guardado${ev>1?'s':''}`,'up');
+      OP.meta={desde,rule:OP_RULE};OP.trades=todos;
+      OP.bh=OP_PAIRS.map((p,n)=>{const a=data[n].arr,k=a.find(x=>x.t>=desde);return k?{p,o:k.o,c:a[a.length-1].c}:null});
+    }else{OP.meta=null;OP.trades=null}
+  }catch(e){
+    console.warn('[TJ] oportunidades',e);
+    const espera=e.limite?netPausa()+5e3:6e4;
+    OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar la medición.'
+      :e.limite?`Binance limitó las consultas (código ${e.codigo||NET.codigo}). Reintento automático en ${Math.ceil(espera/6e4)} min.`
+      :`Sin conexión con Binance (${e.message}). Reintento automático en 1 min.`;
+    clearTimeout(OP.retry);OP.retry=setTimeout(()=>oppRefresh(true),espera);
+  }
+  OP.slot=slot;OP.uid=uid0;  /* también tras un error: evita reintentos en bucle; «Actualizar» fuerza otro intento */
   OP.busy=false;
   if(S.ui.view==='opo')softRender();
 }
 
-/* ---------- resumen: señales, rango 24 h y comprar y mantener ---------- */
-function oppSummary(){
-  if(!OP.meta||!OP.sigs)return null;
-  const fee=(S.set.feePct||0)/100,cap=Math.max(0,+S.set.learnCap||0),rows=[];
-  for(const p of OP_PAIRS){
-    const arr=OP.c[p],idx=OP.idx[p];if(!arr)continue;
-    const sg=OP.sigs.filter(s=>s.pair===p).map(s=>({s,o:opOutcome(s,arr,idx)})).filter(x=>x.o);
-    const done=sg.filter(x=>x.o.st!=='open');
-    const tp=done.filter(x=>x.o.st==='tp').length,sl=done.filter(x=>x.o.st==='sl').length,ex=done.length-tp-sl;
-    const sumR=done.reduce((a,x)=>a+x.o.r,0),usd=done.reduce((a,x)=>a+opPnl(x.s,x.o.exit),0);
-    /* rango: cada hora cerrada desde 'desde' que ya tiene su vela +24 h */
-    let cov=0,nc=0;
-    const i0=idx.get(OP.meta.desde);
-    if(i0!=null)for(let i=Math.max(i0,72);i+OP_H<arr.length;i++){
-      const r=[];for(let j=i-71;j<=i;j++)r.push(Math.log(arr[j].c/arr[j-1].c));
-      const m=r.reduce((a,b)=>a+b,0)/72,sig=Math.sqrt(r.reduce((a,b)=>a+(b-m)**2,0)/71),b=OP_K*sig*Math.sqrt(OP_H),y=arr[i+OP_H].c;
-      nc++;if(y>=arr[i].c*Math.exp(-b)&&y<=arr[i].c*Math.exp(b))cov++;
-    }
-    const first=i0!=null?arr[i0].c:null,last=arr[arr.length-1].c;
-    const bh=first?cap*(1-fee)*(last/first)*(1-fee)-cap:null;
-    rows.push({p,n:sg.length,done:done.length,open:sg.length-done.length,tp,sl,ex,sumR,avgR:done.length?sumR/done.length:null,usd,cov:nc?cov/nc:null,nc,bh,bhPct:first?(last/first-1)*100:null,list:sg});
-  }
-  return rows;
-}
-
 /* ---------- vista ---------- */
-function oppCard(p){
-  const e=OP.cur[p];
-  if(!e)return`<div class="card ocard rise"><div class="oh"><b>${opName(p)}</b></div><div class="empty-sm" style="height:120px">${OP.busy?'Cargando velas…':OP.err?'Sin datos':'—'}</div></div>`;
-  const span=e.hi-e.lo,pos=x=>clamp((x-(e.lo-span*.25))/(span*1.5)*100,0,100);
-  const above=e.close>e.e200,d200=(e.close/e.e200-1)*100;
-  let setup;
-  if(e.signal){
-    const z=opSize(e.entry,e.stop),amb=e.target>e.hi;
-    setup=`<div class="osig buy"><h4>${ic('long',16)} Señal de compra <span class="mut" style="font-weight:600">· vela de las ${opHourStr(e.t)}</span></h4>
-      <div class="orow"><span>Entrada</span><b>${fmtP(e.entry)}</b></div>
-      <div class="orow"><span>Stop (1.5 × ATR)</span><b class="dn">${fmtP(e.stop)}</b></div>
-      <div class="orow"><span>Objetivo (2R)</span><b class="up">${fmtP(e.target)}${amb?' · ambicioso':''}</b></div>
-      <div class="orow"><span>Riesgo/beneficio</span><b>1 : ${OP_RR}</b></div>
-      <div class="orow"><span>Cantidad</span><b>${+z.qty.toPrecision(5)}</b></div>
-      <div class="orow"><span>Valor de la posición</span><b>${fmtMoney(z.notional)}</b></div>
+function oppCard(p,sz){
+  const s=OP.st[p];
+  if(!s||!s.last)return`<div class="card ocard rise"><div class="oh"><b>${opName(p)}</b></div><div class="empty-sm" style="height:120px">${OP.busy?'Cargando velas…':OP.err?'Sin datos':'—'}</div></div>`;
+  const x=s.ind,c=s.last.c,above=x&&c>x.e200;
+  const head=`<div class="oh"><b>${opName(p)}</b><span class="mono">${fmtP(c)}</span></div>
+    <div class="orow"><span>Última vela de 4 h cerrada</span><b>${opHourStr(s.last.t)}${OP.err&&OP.okAt?` <span class="dn" style="font-family:var(--sans);font-size:11px">· datos de ${opEdad()}</span>`:''}</b></div>
+    <div class="orow"><span>EMA 200 (4 h)</span><b class="${above?'up':'dn'}">${x?fmtP(x.e200):'—'} · ${above?'precio arriba':'precio abajo'}</b></div>`;
+  let body;
+  if(s.pos){
+    const t=s.pos,z=sz.get(OP.trades&&OP.trades.find(u=>u.pair===p&&u.tEnt===t.tEnt))||opSize(t.pe,t.stop),fee=opFee();
+    const mark=c*(1-OP_SLIP),rf=((mark-t.pe)-fee*(t.pe+mark))/(t.pe-t.stop),cuenta=t.tSig>=(OP.meta?OP.meta.desde:-Infinity);
+    body=`<div class="osig buy"><h4>${ic('long',16)} Trade abierto <span class="mut" style="font-weight:600">· desde ${opHourStr(t.tEnt)}</span></h4>
+      <div class="orow"><span>Entrada</span><b>${fmtP(t.pe)}</b></div>
+      <div class="orow"><span>Stop inicial (3 × ATR)</span><b class="dn">${fmtP(t.stop)}</b></div>
+      <div class="orow"><span>Nivel de salida actual</span><b>${fmtP(s.lo)}</b></div>
+      <div class="orow"><span>Resultado flotante</span><b class="${cls(rf)}">${fmtR(rf)} · ${fmtMoney(opUsd(t,z,mark),true)}</b></div>
+      <div class="orow"><span>Cantidad · valor</span><b>${+z.qty.toPrecision(5)} · ${fmtMoney(z.notional)}</b></div>
       <div class="orow"><span>Riesgo si toca el stop</span><b class="dn">${fmtMoney(z.risk)}</b></div>
-      <p class="mut" style="font-size:12px;margin:8px 0 0">${S.set.riskPct}% de riesgo sobre tu capital de aprendizaje (${fmtMoney(+S.set.learnCap||0,false,0)}).${z.capped?` El stop está tan cerca que la posición topa en ese capital: arriesgas ${fmtMoney(z.risk)} en vez de ${fmtMoney(z.riskUsd)}.`:''}</p>
-      ${amb?`<p class="mut" style="font-size:12px;margin:8px 0 0">El objetivo queda por encima del rango esperado a 24 h.</p>`:''}
+      <p class="mut" style="font-size:12px;margin:8px 0 0">Sale si una vela de 4 h cierra bajo ${fmtP(s.lo)} (en la apertura siguiente) o si el precio toca el stop.${z.capped?' Tamaño limitado: la suma de posiciones abiertas no pasa de tu capital de aprendizaje.':''}${cuenta?'':' Entró antes de que empezara tu medición: no cuenta en el resumen.'}</p>
       <button class="btn sm" style="margin-top:10px" data-act="opp-reg" data-pair="${p}">${ic('plus',15)} Registrar como trade</button></div>`;
-  }else setup=`<div class="osig"><h4>${ic('shield',16)} Sin setup, fuera del mercado</h4><p class="mut" style="font-size:12px;margin:0">${above?'Precio sobre la EMA 200, pero la última vela no retrocedió a la EMA 20 y cerró por encima.':'Precio por debajo de la EMA 200: la regla solo compra en tendencia alcista.'}</p></div>`;
-  return`<div class="card ocard rise"><div class="oh"><b>${opName(p)}</b><span class="mono">${fmtP(e.close)}</span></div>
-    <div class="orow"><span>Última vela cerrada</span><b>${opHourStr(e.t)}</b></div>
-    <div class="orow"><span>EMA 200 (1 h)</span><b class="${above?'up':'dn'}">${fmtP(e.e200)} · ${above?'precio arriba':'precio abajo'} ${d200>=0?'+':''}${d200.toFixed(2)}%</b></div>
-    <div class="orow"><span>EMA 20 (1 h)</span><b>${fmtP(e.e20)}</b></div>
-    <div class="orow"><span>Rango esperado 24 h (~80 %)</span><b>${fmtP(e.lo)} – ${fmtP(e.hi)}</b></div>
-    <div class="oband" title="Rango esperado a 24 h"><em style="left:${pos(e.lo)}%;width:${pos(e.hi)-pos(e.lo)}%"></em><i style="left:calc(${pos(e.close)}% - 1px)"></i></div>
-    ${setup}</div>`;
+  }else{
+    const pr=s.prev,salio=pr?`<p style="font-size:12px;margin:0 0 8px"><b class="${cls(pr.r)}">Trade cerrado ${opHourStr(pr.tSal)}</b> <span class="mut">· ${pr.tipo==='salida'?'cierre bajo el mínimo de 10 velas':'stop'} · ${fmtR(pr.r)}. Si lo registraste, ciérralo en Bitácora.</span></p>`:'';
+    body=`<div class="osig">${salio}<h4>${ic('shield',16)} Sin trade, fuera del mercado</h4>
+      <div class="orow"><span>Nivel de entrada</span><b>${fmtP(s.hi)}</b></div>
+      <p class="mut" style="font-size:12px;margin:8px 0 0">Compra si una vela de 4 h cierra sobre ${fmtP(s.hi)}${x?` y sobre la EMA 200 (≈ ${fmtP(x.e200)})`:''}, en la apertura siguiente.${above?'':' Hoy el precio está bajo la EMA 200.'}</p></div>`;
+  }
+  return`<div class="card ocard rise">${head}${body}</div>`;
 }
-function oppHistoryHtml(rows){
-  const st={tp:['Objetivo','up'],sl:['Stop','dn'],exp:['Venció 24 h',''],open:['Abierta','']};
-  const all=rows.flatMap(r=>r.list).sort((a,b)=>b.s.t-a.s.t).slice(0,30);
-  if(!all.length)return'<p class="mut" style="margin:0">Aún no hay señales desde que empezó la medición.</p>';
-  return`<div class="oscroll"><table class="otable"><tr><th>Hora</th><th>Par</th><th>Entrada</th><th>Stop</th><th>Objetivo</th><th>Resultado</th><th>R</th><th>${cur()}</th></tr>
-  ${all.map(({s,o})=>{const [l,c]=st[o.st],v=o.st==='open'?null:opPnl(s,o.exit);
-    return`<tr><td>${opHourStr(s.t)}</td><td>${opName(s.pair).replace('/USDT','')}</td><td>${fmtP(s.entry)}</td><td>${fmtP(s.stop)}</td><td>${fmtP(s.target)}</td><td class="${c}">${l}${o.st==='open'?` · ${o.j}/24 h`:''}</td><td class="${cls(o.r)}">${o.st==='open'?'—':fmtR(o.r)}</td><td class="${cls(v)}">${v==null?'—':fmtMoney(v,true)}</td></tr>`}).join('')}</table></div>`;
-}
-function oppSummaryHtml(){
-  if(!SY.user)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><p class="mut" style="margin:0 0 14px">Inicia sesión para guardar cada señal en tu cuenta y medir después cómo le fue frente a comprar y mantener.</p><button class="btn btn-pri" data-act="login">Iniciar sesión con Google</button></div>`;
-  const rows=oppSummary();
-  if(!rows)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><div class="empty-sm" style="height:80px">${OP.busy?'Cargando tus señales…':'—'}</div></div>`;
-  const T=rows.reduce((a,r)=>({done:a.done+r.done,tp:a.tp+r.tp,sumR:a.sumR+r.sumR,usd:a.usd+r.usd,bh:a.bh+(r.bh||0)}),{done:0,tp:0,sumR:0,usd:0,bh:0});
-  const pct=v=>v==null?'—':(v*100).toFixed(0)+'%';
-  return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3><span class="mut" style="font-size:12px">desde ${opHourStr(OP.meta.desde)}</span></div>
-  <div class="oscroll"><table class="otable"><tr><th>Par</th><th>Señales</th><th>Cerradas</th><th>Ganadas</th><th>R prom.</th><th>Resultado ${cur()}</th><th>Comprar y mantener</th><th>Rango 24 h dentro</th></tr>
-  ${rows.map(r=>`<tr><td>${opName(r.p).replace('/USDT','')}</td><td>${r.n}</td><td>${r.done}${r.open?` (+${r.open})`:''}</td><td>${r.done?pct(r.tp/r.done):'—'}</td><td class="${cls(r.avgR)}">${fmtR(r.avgR)}</td><td class="${cls(r.usd)}">${r.done?fmtMoney(r.usd,true):'—'}</td><td class="${cls(r.bh)}">${r.bh==null?'—':fmtMoney(r.bh,true)+` (${r.bhPct>=0?'+':''}${r.bhPct.toFixed(1)}%)`}</td><td>${r.nc?pct(r.cov)+` <span class="mut">de ${r.nc} h</span>`:'—'}</td></tr>`).join('')}
-  <tr><td><b>Total</b></td><td></td><td>${T.done}</td><td>${T.done?pct(T.tp/T.done):'—'}</td><td class="${cls(T.sumR)}">${T.done?fmtR(T.sumR/T.done):'—'}</td><td class="${cls(T.usd)}">${T.done?fmtMoney(T.usd,true):'—'}</td><td class="${cls(T.bh)}">${fmtMoney(T.bh,true)} <span class="mut">(×4)</span></td><td></td></tr></table></div>
-  <p class="mut" style="font-size:12px;margin:10px 0 0">Cada señal arriesga tu % de riesgo de Ajustes sobre el capital de aprendizaje (${fmtMoney(+S.set.learnCap||0,false,0)}), sin pasar de ese capital; incluye comisiones. "Comprar y mantener" invierte ese mismo capital en cada moneda desde el inicio de la medición. Una señal puede empezar mientras otra sigue abierta.${T.done<30?` <b>Con ${T.done} señal${T.done===1?'':'es'} cerrada${T.done===1?'':'s'} todavía no se puede concluir nada.</b>`:''}</p>
-  <div class="card-h" style="margin-top:18px"><h3>${ic('list',18)} Últimas señales</h3></div>${oppHistoryHtml(rows)}</div>`;
+function oppSummaryHtml(sz){
+  if(!SY.user)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><p class="mut" style="margin:0 0 14px">Inicia sesión para guardar cada entrada y salida de la regla en tu cuenta y medir cómo le va frente a comprar y mantener.</p><button class="btn btn-pri" data-act="login">Iniciar sesión con Google</button></div>`;
+  if(!OP.meta||!OP.trades)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><div class="empty-sm" style="height:80px">${OP.busy?'Cargando tu medición…':'—'}</div></div>`;
+  const fee=opFee(),cap=Math.max(0,+S.set.learnCap||0),pct=v=>(v*100).toFixed(0)+'%';
+  const fila=(nombre,ts,bh)=>{
+    const done=ts.filter(t=>t.tSal!=null),abiertos=ts.length-done.length,win=done.filter(t=>t.r>0).length,sumR=done.reduce((a,t)=>a+t.r,0);
+    const usd=done.reduce((a,t)=>a+opUsd(t,sz.get(t),t.ps),0);
+    return`<tr><td>${nombre}</td><td>${done.length}${abiertos?` (+${abiertos})`:''}</td><td>${done.length?pct(win/done.length):'—'}</td><td class="${cls(sumR)}">${done.length?fmtR(sumR/done.length):'—'}</td><td class="${cls(sumR)}">${done.length?fmtR(sumR):'—'}</td><td class="${cls(usd)}">${done.length?fmtMoney(usd,true):'—'}</td><td class="${cls(bh)}">${bh==null?'—':fmtMoney(bh,true)}</td></tr>`;
+  };
+  const bhUsd=b=>b?(cap/4)/(b.o*(1+OP_SLIP)*(1+fee))*b.c*(1-OP_SLIP)*(1-fee)-cap/4:null; /* 25 % del capital en cada moneda */
+  const bhs=OP.bh.map(bhUsd),bhT=bhs.every(v=>v!=null)?bhs.reduce((a,b)=>a+b,0):null;
+  const done=OP.trades.filter(t=>t.tSal!=null).length;
+  const hist=[...OP.trades].sort((a,b)=>b.tEnt-a.tEnt).slice(0,30);
+  return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado? · regla ${OP_RULE}</h3><span class="mut" style="font-size:12px">desde ${opHourStr(OP.meta.desde)}</span></div>
+  <div class="oscroll"><table class="otable"><tr><th>Par</th><th>Cerrados</th><th>Ganan</th><th>R prom.</th><th>R total</th><th>Resultado ${cur()}</th><th>Comprar y mantener</th></tr>
+  ${OP_PAIRS.map((p,n)=>fila(opName(p).replace('/USDT',''),OP.trades.filter(t=>t.pair===p),bhs[n])).join('')}
+  ${fila('<b>Total</b>',OP.trades,bhT)}</table></div>
+  <p class="mut" style="font-size:12px;margin:10px 0 0">Cada trade arriesga tu ${S.set.riskPct}% de riesgo sobre el capital de aprendizaje (${fmtMoney(cap,false,0)}) y la suma de posiciones abiertas no pasa de ese capital. Incluye 0.05 % de deslizamiento por lado y tu comisión de Ajustes (${S.set.feePct||0}% por lado). Comprar y mantener reparte ese mismo capital 25 % en cada moneda desde el inicio de la medición.${done<40?` <b>Con ${done} trade${done===1?'':'s'} cerrado${done===1?'':'s'} todavía no se puede concluir nada (mínimo 40).</b>`:''}</p>
+  <div class="card-h" style="margin-top:18px"><h3>${ic('list',18)} Trades de la regla</h3></div>
+  ${hist.length?`<div class="oscroll"><table class="otable"><tr><th>Entrada</th><th>Par</th><th>Precio</th><th>Stop</th><th>Salida</th><th>Motivo</th><th>R</th><th>${cur()}</th></tr>
+  ${hist.map(t=>{const z=sz.get(t),v=t.tSal!=null?opUsd(t,z,t.ps):null;
+    return`<tr><td>${opHourStr(t.tEnt)}</td><td>${opName(t.pair).replace('/USDT','')}</td><td>${fmtP(t.pe)}</td><td>${fmtP(t.stop)}</td><td>${t.tSal!=null?opHourStr(t.tSal):'abierto'}</td><td>${t.tSal==null?'—':t.tipo==='salida'?'mín. 10':t.tipo}</td><td class="${cls(t.r)}">${t.tSal!=null?fmtR(t.r):'—'}</td><td class="${cls(v)}">${v==null?'—':fmtMoney(v,true)}</td></tr>`}).join('')}</table></div>`:'<p class="mut" style="margin:0">Aún no hay trades desde que empezó la medición.</p>'}</div>`;
 }
 function paintOpp(){if(S.ui.view==='opo'){const h=$('#oppstat');if(h)h.innerHTML=oppStatus()}}
-const oppStatus=()=>OP.busy?'Actualizando…':OP.err?`<span class="dn">${esc(OP.err)}</span>`:OP.hour?`Velas de 1 h cerradas · Binance · ${OP.uid?'señales guardadas en tu cuenta':'sin sesión: no se guarda'}`:'';
+const opEdad=()=>{const m=Math.round((Date.now()-OP.okAt)/6e4);return m<1?'hace menos de 1 min':m<60?`hace ${m} min`:`hace ${Math.round(m/60)} h`};
+const oppStatus=()=>OP.busy?'Actualizando…':OP.err?`<span class="dn">${esc(OP.err)}</span>${OP.okAt?` · <b>datos de ${opEdad()}</b>`:''}`:OP.slot?`Velas de 4 h cerradas · Binance · ${OP.uid?'medición guardada en tu cuenta':'sin sesión: no se guarda'}`:'';
 function renderOpp(){
-  const el=$('#v-opo');
-  el.innerHTML=`<div class="card rise" style="margin-bottom:14px"><div class="card-h"><h3>${ic('target',18)} Regla: retroceso a la EMA 20 en tendencia</h3><button class="btn sm" data-act="opp-refresh" ${OP.busy?'disabled':''}>${ic('pulse',15)} Actualizar</button></div>
-    <p class="mut" style="margin:0 0 6px;font-size:13px">Solo compras (spot). Hay señal cuando, en velas de 1 hora, el precio está sobre la EMA 200, retrocede hasta tocar la EMA 20 y cierra de nuevo por encima. Stop a 1.5 × ATR(14), objetivo a 2R. Es una regla para medir, no una recomendación.</p>
+  const el=$('#v-opo'),sz=opSizing(OP.trades||[]);
+  el.innerHTML=`<div class="card rise" style="margin-bottom:14px"><div class="card-h"><h3>${ic('target',18)} Regla ${OP_RULE}: ruptura de 20 velas de 4 h</h3><button class="btn sm" data-act="opp-refresh" ${OP.busy?'disabled':''}>${ic('pulse',15)} Actualizar</button></div>
+    <p class="mut" style="margin:0 0 6px;font-size:13px">Solo compras (spot), velas de 4 h. Entra cuando una vela cierra sobre el máximo de las 20 anteriores y sobre la EMA 200, en la apertura siguiente. Sale cuando una vela cierra bajo el mínimo de las 10 anteriores (en la apertura siguiente) o si toca el stop inicial de 3 × ATR(14). Sin objetivo fijo. Es una regla para medir, no una recomendación.</p>
     <div class="mut" style="font-size:12px" id="oppstat">${oppStatus()}</div></div>
-    <div class="ogrid">${OP_PAIRS.map(oppCard).join('')}</div>${oppSummaryHtml()}`;
+    <div class="ogrid">${OP_PAIRS.map(p=>oppCard(p,sz)).join('')}</div>${oppSummaryHtml(sz)}`;
   const uid=SY.user&&SY.fb?SY.user.uid:null;
-  if(!OP.busy&&(OP.hour!==Math.floor(Date.now()/HR)||OP.uid!==uid))setTimeout(()=>oppRefresh(),0);
+  if(!OP.busy&&(OP.slot!==Math.floor(Date.now()/OP_TF)||OP.uid!==uid))setTimeout(()=>oppRefresh(),0);
 }
 function oppRegister(p){
-  const e=OP.cur[p];if(!e||!e.signal)return;
-  const z=opSize(e.entry,e.stop);
-  openTradeForm({symbol:opName(p),dir:'long',mkt:'spot',strat:'Pullback EMA20',entry:+e.entry.toPrecision(8),sl:+e.stop.toPrecision(8),tp:+e.target.toPrecision(8),qty:+z.qty.toPrecision(6),
-    notes:`Señal Oportunidades (${OP_RULE}) de la vela de las ${opHourStr(e.t)}`},'opp');
+  const s=OP.st[p];if(!s||!s.pos)return;
+  const t=s.pos,sz=opSizing(OP.trades||[]),z=sz.get(OP.trades&&OP.trades.find(u=>u.pair===p&&u.tEnt===t.tEnt))||opSize(t.pe,t.stop);
+  openTradeForm({symbol:opName(p),dir:'long',mkt:'spot',strat:'D4h-v2',entry:+t.pe.toPrecision(8),sl:+t.stop.toPrecision(8),tp:null,qty:+z.qty.toPrecision(6),
+    openAt:new Date(t.tEnt).toISOString(),notes:`Regla ${OP_RULE}: señal de la vela de 4 h de las ${opHourStr(t.tSig)}; salida si cierra bajo el mínimo de 10 velas`},'opp');
 }
-setInterval(()=>{if(S.ui.view==='opo'&&!document.hidden&&!OP.busy&&OP.hour!==Math.floor(Date.now()/HR))oppRefresh()},60000);
+setInterval(()=>{if(S.ui.view==='opo'&&!document.hidden&&!OP.busy&&OP.slot!==Math.floor(Date.now()/OP_TF))oppRefresh()},60000);
 
 /* ---------- arranque ---------- */
 load();
