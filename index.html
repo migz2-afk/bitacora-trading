@@ -702,7 +702,7 @@ function render(){
   $('#bottomnav').innerHTML=[NAV[0],NAV[1]].map(([id,i,l])=>bn(id,i,l,v)).join('')+`<button class="fab" data-act="new" aria-label="Nuevo trade">${ic('plus',28)}</button>`+[NAV[2],NAV[3]].map(([id,i,l])=>bn(id,i,l,v)).join('');$('#topset').innerHTML=ic('sliders',22);
   $('#sidenew').innerHTML=ic('plus',18)+' Nuevo trade <kbd>N</kbd>';$('#topnew').innerHTML=ic('plus',18)+' Nuevo trade';
   $('#title').textContent=VIEWS[v];
-  $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':v==='opo'?'Regla d4h-v2 · BTC, ETH, SOL, XRP · velas de 4 h':'Cuenta, riesgo y datos';
+  $('#subtitle').textContent=v==='panel'?new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'}):v==='bit'?S.trades.length+' operaciones':v==='ana'?'Qué funciona y qué no':v==='opo'?'Regla d4h-v2 · 12 monedas · velas de 4 h':'Cuenta, riesgo y datos';
   $('#rangebar').innerHTML=(v==='panel'||v==='ana')&&S.trades.length?RANGES.map(([k,l])=>`<button class="chip ${S.ui.range===k?'on':''}" data-act="range" data-v="${k}">${l}</button>`).join(''):'';
   const eq=equityNow();
   $('#sidefoot').innerHTML=`<div class="lbl">Capital</div><div class="mono" style="font-size:20px;font-weight:800;margin:3px 0 8px">${fmtMoney(eq)}</div><div class="savedot"><i></i>${storageOK?'Guardado en este navegador':'Sin almacenamiento'}</div><div class="syncst"></div>`;
@@ -1608,13 +1608,16 @@ function commit(ops){
      Precios con 0.05 % de deslizamiento por lado (como el backtest) + la comisión de Ajustes.
    EMA200 y ATR14 en una ventana fija de 1,500 velas que termina en cada vela: determinista y
      verificado contra el cálculo continuo de fase2.py (mismas señales en los 3 años de datos).
-   Medición (con sesión): meta/opps-d4h-v2 = {desde, rule} (la de v1, meta/opps, no se toca).
+   Medición (con sesión): meta/opps-d4h-v2 = {desde, rule, desdePar} (la de v1, meta/opps, no se toca).
+     BTC/ETH/SOL/XRP miden desde 'desde'; cada moneda agregada después mide desde desdePar[par], fijado una
+     sola vez en la vela de 4 h en curso la primera vez que se abre la pestaña con sesión.
      Desde 'desde' la app recorre las velas cerradas en orden y guarda cada entrada y cada salida una
      vez en opps/d4h-v2_{PAR}_{AAAAMMDDHH de la entrada}. El estado arranca 300 velas antes de 'desde'
      para que tarjetas y medición coincidan; solo cuentan los trades cuya SEÑAL es desde 'desde'.
      Las señales de v1 se conservan en opps/ con rule 'ema200-pb20-v1'.
    ===================================================================== */
-const OP_PAIRS=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
+const OP_BASE=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT']; /* miden desde meta.desde (sin reiniciar) */
+const OP_PAIRS=[...OP_BASE,'BNBUSDT','ADAUSDT','LINKUSDT','DOGEUSDT','AVAXUSDT','LTCUSDT','DOTUSDT','TRXUSDT']; /* nuevas: meta.desdePar[par] */
 const OP_RULE='d4h-v2',OP_META='opps-d4h-v2',OP_TF=4*36e5,OP_WIN=1500,OP_WARM=300,OP_K=3,OP_ENTN=20,OP_EXN=10,OP_SLIP=0.0005;
 const OP={st:{},trades:null,meta:null,busy:false,err:'',slot:0,uid:null,okAt:0,retry:0};
 const opName=p=>p.replace(/USDT$/,'/USDT');
@@ -1702,6 +1705,8 @@ function opSizing(list){ /* tamaño de cada trade en orden de entrada, con el to
   return out;
 }
 const opUsd=(t,z,exit)=>z.qty*(exit-t.pe)-opFee()*z.qty*(t.pe+exit);
+const opUsado=sz=>(OP.trades||[]).filter(t=>t.tSal==null).reduce((a,t)=>a+((sz.get(t)||{}).notional||0),0); /* capital en posiciones abiertas medidas */
+const opTam=(p,t,sz)=>sz.get(OP.trades&&OP.trades.find(u=>u.pair===p&&u.tEnt===t.tEnt))||opSize(t.pe,t.stop,opUsado(sz));
 
 /* ---------- carga, medición sin huecos y guardado ---------- */
 async function oppRefresh(force){
@@ -1719,34 +1724,40 @@ async function oppRefresh(force){
       }catch(e){console.warn('[TJ] oportunidades: nube',e);uid=null;
         OP.err=e.code==='permission-denied'?'Tu cuenta no tiene permiso para guardar la medición.':'No se pudo leer tu cuenta (sin conexión). La medición se guardará en el próximo intento.'}
     }
-    const desde=meta?meta.desde:slot*OP_TF; /* nueva medición: empieza con la vela de 4 h en curso */
-    const ini=desde-OP_WARM*OP_TF;
-    const data=await Promise.all(OP_PAIRS.map(p=>opData(p,ini-(OP_WIN+OP_ENTN)*OP_TF,force)));
+    /* inicio de la medición por moneda: las 4 originales usan meta.desde; cada moneda nueva, su propio
+       desdePar[par], fijado una sola vez en la vela de 4 h en curso (la primera que cierra al activarla) */
+    const ahora=slot*OP_TF,desdePar={...((meta&&meta.desdePar)||{})},nuevos={},base=meta?meta.desde:ahora,D={};
+    for(const p of OP_PAIRS)D[p]=OP_BASE.includes(p)?base:(desdePar[p]??(nuevos[p]=desdePar[p]=ahora));
+    const data=[];
+    for(let i=0;i<OP_PAIRS.length;i+=3) /* de 3 en 3 monedas, para no saturar a Binance */
+      data.push(...await Promise.all(OP_PAIRS.slice(i,i+3).map(p=>opData(p,D[p]-(OP_WARM+OP_WIN+OP_ENTN)*OP_TF,force))));
     const fee=opFee(),todos=[],st={};
     OP_PAIRS.forEach((p,n)=>{
-      const {arr,live}=data[n],last=arr.length-1;
+      const {arr,live}=data[n],last=arr.length-1,ini=D[p]-OP_WARM*OP_TF;
       const i0=arr.findIndex(k=>k.t>=ini),run=opRun(arr,i0,live,fee);
-      const medidos=[...run.trades,...(run.pos?[run.pos]:[])].filter(t=>t.tSig>=desde).map(t=>({...t,pair:p})); /* cuentan las señales desde el inicio de la medición */
+      const medidos=[...run.trades,...(run.pos?[run.pos]:[])].filter(t=>t.tSig>=D[p]).map(t=>({...t,pair:p})); /* cuentan las señales desde el inicio de la medición de esa moneda */
       todos.push(...medidos);
       const prev=run.trades[run.trades.length-1];
       st[p]={last:arr[last],live,pos:run.pos?{...run.pos,pair:p}:null,pend:run.pend,ind:opInd(arr,last),
         hi:opHi(arr,last+1),lo:opLo(arr,last+1),prev:prev&&prev.tSal>=arr[last].t?{...prev,pair:p}:null};
     });
-    OP.st=st;OP.okAt=Date.now();  /* solo se reemplazan los datos cuando las 4 monedas cargaron bien */
+    OP.st=st;OP.okAt=Date.now();OP.desde=D;  /* solo se reemplazan los datos cuando todas las monedas cargaron bien */
     if(uid){
-      const writes=[];
-      if(!meta)writes.push([F.fs.doc(root,'meta',OP_META),{desde,rule:OP_RULE}]);
+      const writes=[],metaRef=F.fs.doc(root,'meta',OP_META);
+      if(!meta)writes.push([metaRef,{desde:base,rule:OP_RULE,desdePar}]);
+      else if(Object.keys(nuevos).length)writes.push([metaRef,{desdePar:nuevos},{merge:true}]); /* agrega monedas sin tocar 'desde' */
+      const nMeta=writes.length;
       for(const t of todos){
         const id=opId(t.pair,t.tEnt),s=saved.get(id);
         const ent={pair:t.pair,rule:OP_RULE,tSig:t.tSig,tEnt:t.tEnt,pe:t.pe,stop:t.stop,atr:t.atr};
         const doc=t.tSal!=null?{...ent,tSal:t.tSal,ps:t.ps,tipo:t.tipo,r:t.r}:ent;
         if(!s||(t.tSal!=null&&s.tSal==null))writes.push([F.fs.doc(root,'opps',id),doc]); /* una vez la entrada, una vez la salida */
       }
-      for(let i=0;i<writes.length;i+=400){const b=F.fs.writeBatch(F.db);writes.slice(i,i+400).forEach(([r,d])=>b.set(r,d));await b.commit()}
-      const ev=writes.length-(meta?0:1);
+      for(let i=0;i<writes.length;i+=400){const b=F.fs.writeBatch(F.db);writes.slice(i,i+400).forEach(([r,d,o])=>o?b.set(r,d,o):b.set(r,d));await b.commit()}
+      const ev=writes.length-nMeta;
       if(ev>0&&meta)toast(ic('target',16)+` ${ev} evento${ev>1?'s':''} nuevo${ev>1?'s':''} de la regla guardado${ev>1?'s':''}`,'up');
-      OP.meta={desde,rule:OP_RULE};OP.trades=todos;
-      OP.bh=OP_PAIRS.map((p,n)=>{const a=data[n].arr,k=a.find(x=>x.t>=desde);return k?{p,o:k.o,c:a[a.length-1].c}:null});
+      OP.meta={desde:base,rule:OP_RULE,desdePar};OP.trades=todos;
+      OP.bh=OP_PAIRS.map((p,n)=>{const a=data[n].arr,k=a.find(x=>x.t>=D[p]);return k?{p,o:k.o,c:a[a.length-1].c}:null});
     }else{OP.meta=null;OP.trades=null}
   }catch(e){
     console.warn('[TJ] oportunidades',e);
@@ -1771,16 +1782,16 @@ function oppCard(p,sz){
     <div class="orow"><span>EMA 200 (4 h)</span><b class="${above?'up':'dn'}">${x?fmtP(x.e200):'—'} · ${above?'precio arriba':'precio abajo'}</b></div>`;
   let body;
   if(s.pos){
-    const t=s.pos,z=sz.get(OP.trades&&OP.trades.find(u=>u.pair===p&&u.tEnt===t.tEnt))||opSize(t.pe,t.stop),fee=opFee();
-    const mark=c*(1-OP_SLIP),rf=((mark-t.pe)-fee*(t.pe+mark))/(t.pe-t.stop),cuenta=t.tSig>=(OP.meta?OP.meta.desde:-Infinity);
+    const t=s.pos,z=opTam(p,t,sz),fee=opFee(),cero=!(z.qty>0);
+    const mark=c*(1-OP_SLIP),rf=((mark-t.pe)-fee*(t.pe+mark))/(t.pe-t.stop),cuenta=t.tSig>=(OP.desde&&OP.desde[p]!=null?OP.desde[p]:-Infinity);
     body=`<div class="osig buy"><h4>${ic('long',16)} Trade abierto <span class="mut" style="font-weight:600">· desde ${opHourStr(t.tEnt)}</span></h4>
       <div class="orow"><span>Entrada</span><b>${fmtP(t.pe)}</b></div>
       <div class="orow"><span>Stop inicial (3 × ATR)</span><b class="dn">${fmtP(t.stop)}</b></div>
       <div class="orow"><span>Nivel de salida actual</span><b>${fmtP(s.lo)}</b></div>
       <div class="orow"><span>Resultado flotante</span><b class="${cls(rf)}">${fmtR(rf)} · ${fmtMoney(opUsd(t,z,mark),true)}</b></div>
-      <div class="orow"><span>Cantidad · valor</span><b>${+z.qty.toPrecision(5)} · ${fmtMoney(z.notional)}</b></div>
-      <div class="orow"><span>Riesgo si toca el stop</span><b class="dn">${fmtMoney(z.risk)}</b></div>
-      <p class="mut" style="font-size:12px;margin:8px 0 0">Sale si una vela de 4 h cierra bajo ${fmtP(s.lo)} (en la apertura siguiente) o si el precio toca el stop.${z.capped?' Tamaño limitado: la suma de posiciones abiertas no pasa de tu capital de aprendizaje.':''}${cuenta?'':' Entró antes de que empezara tu medición: no cuenta en el resumen.'}</p>
+      ${cero?`<div class="orow"><span>Tamaño</span><b class="dn">0 · sin capital disponible</b></div>`:`<div class="orow"><span>Cantidad · valor</span><b>${+z.qty.toPrecision(5)} · ${fmtMoney(z.notional)}</b></div>
+      <div class="orow"><span>Riesgo si toca el stop</span><b class="dn">${fmtMoney(z.risk)}</b></div>`}
+      <p class="mut" style="font-size:12px;margin:8px 0 0">Sale si una vela de 4 h cierra bajo ${fmtP(s.lo)} (en la apertura siguiente) o si el precio toca el stop.${cero?' Tus posiciones abiertas ya usan todo el capital de aprendizaje: la regla entra, pero con tamaño 0.':z.capped?' Tamaño reducido a lo que quedaba libre del capital de aprendizaje.':''}${cuenta?'':' Entró antes de que empezara la medición de esta moneda: no cuenta en el resumen.'}</p>
       <button class="btn sm" style="margin-top:10px" data-act="opp-reg" data-pair="${p}">${ic('plus',15)} Registrar como trade</button></div>`;
   }else{
     const pr=s.prev,salio=pr?`<p style="font-size:12px;margin:0 0 8px"><b class="${cls(pr.r)}">Trade cerrado ${opHourStr(pr.tSal)}</b> <span class="mut">· ${pr.tipo==='salida'?'cierre bajo el mínimo de 10 velas':'stop'} · ${fmtR(pr.r)}. Si lo registraste, ciérralo en Bitácora.</span></p>`:'';
@@ -1794,20 +1805,20 @@ function oppSummaryHtml(sz){
   if(!SY.user)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><p class="mut" style="margin:0 0 14px">Inicia sesión para guardar cada entrada y salida de la regla en tu cuenta y medir cómo le va frente a comprar y mantener.</p><button class="btn btn-pri" data-act="login">Iniciar sesión con Google</button></div>`;
   if(!OP.meta||!OP.trades)return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado?</h3></div><div class="empty-sm" style="height:80px">${OP.busy?'Cargando tu medición…':'—'}</div></div>`;
   const fee=opFee(),cap=Math.max(0,+S.set.learnCap||0),pct=v=>(v*100).toFixed(0)+'%';
-  const fila=(nombre,ts,bh)=>{
+  const fila=(nombre,ts,bh,desde)=>{
     const done=ts.filter(t=>t.tSal!=null),abiertos=ts.length-done.length,win=done.filter(t=>t.r>0).length,sumR=done.reduce((a,t)=>a+t.r,0);
     const usd=done.reduce((a,t)=>a+opUsd(t,sz.get(t),t.ps),0);
-    return`<tr><td>${nombre}</td><td>${done.length}${abiertos?` (+${abiertos})`:''}</td><td>${done.length?pct(win/done.length):'—'}</td><td class="${cls(sumR)}">${done.length?fmtR(sumR/done.length):'—'}</td><td class="${cls(sumR)}">${done.length?fmtR(sumR):'—'}</td><td class="${cls(usd)}">${done.length?fmtMoney(usd,true):'—'}</td><td class="${cls(bh)}">${bh==null?'—':fmtMoney(bh,true)}</td></tr>`;
+    return`<tr><td>${nombre}</td><td>${desde?fmtDay(new Date(desde).toISOString()):''}</td><td>${done.length}${abiertos?` (+${abiertos})`:''}</td><td>${done.length?pct(win/done.length):'—'}</td><td class="${cls(sumR)}">${done.length?fmtR(sumR/done.length):'—'}</td><td class="${cls(sumR)}">${done.length?fmtR(sumR):'—'}</td><td class="${cls(usd)}">${done.length?fmtMoney(usd,true):'—'}</td><td class="${cls(bh)}">${bh==null?'—':fmtMoney(bh,true)}</td></tr>`;
   };
-  const bhUsd=b=>b?(cap/4)/(b.o*(1+OP_SLIP)*(1+fee))*b.c*(1-OP_SLIP)*(1-fee)-cap/4:null; /* 25 % del capital en cada moneda */
+  const parte=cap/OP_PAIRS.length,bhUsd=b=>b?parte/(b.o*(1+OP_SLIP)*(1+fee))*b.c*(1-OP_SLIP)*(1-fee)-parte:null; /* el capital repartido en partes iguales */
   const bhs=OP.bh.map(bhUsd),bhT=bhs.every(v=>v!=null)?bhs.reduce((a,b)=>a+b,0):null;
   const done=OP.trades.filter(t=>t.tSal!=null).length;
   const hist=[...OP.trades].sort((a,b)=>b.tEnt-a.tEnt).slice(0,30);
-  return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado? · regla ${OP_RULE}</h3><span class="mut" style="font-size:12px">desde ${opHourStr(OP.meta.desde)}</span></div>
-  <div class="oscroll"><table class="otable"><tr><th>Par</th><th>Cerrados</th><th>Ganan</th><th>R prom.</th><th>R total</th><th>Resultado ${cur()}</th><th>Comprar y mantener</th></tr>
-  ${OP_PAIRS.map((p,n)=>fila(opName(p).replace('/USDT',''),OP.trades.filter(t=>t.pair===p),bhs[n])).join('')}
+  return`<div class="card rise"><div class="card-h"><h3>${ic('chart',18)} ¿Qué habría pasado? · regla ${OP_RULE}</h3></div>
+  <div class="oscroll"><table class="otable"><tr><th>Par</th><th>Desde</th><th>Cerrados</th><th>Ganan</th><th>R prom.</th><th>R total</th><th>Resultado ${cur()}</th><th>Comprar y mantener</th></tr>
+  ${OP_PAIRS.map((p,n)=>fila(opName(p).replace('/USDT',''),OP.trades.filter(t=>t.pair===p),bhs[n],OP.desde&&OP.desde[p])).join('')}
   ${fila('<b>Total</b>',OP.trades,bhT)}</table></div>
-  <p class="mut" style="font-size:12px;margin:10px 0 0">Cada trade arriesga tu ${S.set.riskPct}% de riesgo sobre el capital de aprendizaje (${fmtMoney(cap,false,0)}) y la suma de posiciones abiertas no pasa de ese capital. Incluye 0.05 % de deslizamiento por lado y tu comisión de Ajustes (${S.set.feePct||0}% por lado). Comprar y mantener reparte ese mismo capital 25 % en cada moneda desde el inicio de la medición.${done<40?` <b>Con ${done} trade${done===1?'':'s'} cerrado${done===1?'':'s'} todavía no se puede concluir nada (mínimo 40).</b>`:''}</p>
+  <p class="mut" style="font-size:12px;margin:10px 0 0">Cada trade arriesga tu ${S.set.riskPct}% de riesgo sobre el capital de aprendizaje (${fmtMoney(cap,false,0)}) y la suma de posiciones abiertas no pasa de ese capital. Incluye 0.05 % de deslizamiento por lado y tu comisión de Ajustes (${S.set.feePct||0}% por lado). Comprar y mantener reparte ese mismo capital en partes iguales entre las ${OP_PAIRS.length} monedas (${fmtMoney(cap/OP_PAIRS.length,false,0)} cada una), desde el inicio de la medición de cada moneda.${done<40?` <b>Con ${done} trade${done===1?'':'s'} cerrado${done===1?'':'s'} todavía no se puede concluir nada (mínimo 40).</b>`:''}</p>
   <div class="card-h" style="margin-top:18px"><h3>${ic('list',18)} Trades de la regla</h3></div>
   ${hist.length?`<div class="oscroll"><table class="otable"><tr><th>Entrada</th><th>Par</th><th>Precio</th><th>Stop</th><th>Salida</th><th>Motivo</th><th>R</th><th>${cur()}</th></tr>
   ${hist.map(t=>{const z=sz.get(t),v=t.tSal!=null?opUsd(t,z,t.ps):null;
@@ -1821,14 +1832,16 @@ function renderOpp(){
   el.innerHTML=`<div class="card rise" style="margin-bottom:14px"><div class="card-h"><h3>${ic('target',18)} Regla ${OP_RULE}: ruptura de 20 velas de 4 h</h3><button class="btn sm" data-act="opp-refresh" ${OP.busy?'disabled':''}>${ic('pulse',15)} Actualizar</button></div>
     <p class="mut" style="margin:0 0 6px;font-size:13px">Solo compras (spot), velas de 4 h. Entra cuando una vela cierra sobre el máximo de las 20 anteriores y sobre la EMA 200, en la apertura siguiente. Sale cuando una vela cierra bajo el mínimo de las 10 anteriores (en la apertura siguiente) o si toca el stop inicial de 3 × ATR(14). Sin objetivo fijo. Es una regla para medir, no una recomendación.</p>
     <div class="mut" style="font-size:12px" id="oppstat">${oppStatus()}</div></div>
+    ${OP.okAt?`<p style="font-size:13px;margin:0 0 12px"><b>Trades abiertos: ${OP_PAIRS.filter(p=>OP.st[p]&&OP.st[p].pos).length} de ${OP_PAIRS.length}</b> <span class="mut">· capital usado: <b>${fmtMoney(opUsado(sz))}</b> de ${fmtMoney(Math.max(0,+S.set.learnCap||0),false,0)}</span></p>`:''}
     <div class="ogrid">${OP_PAIRS.map(p=>oppCard(p,sz)).join('')}</div>${oppSummaryHtml(sz)}`;
   const uid=SY.user&&SY.fb?SY.user.uid:null;
   if(!OP.busy&&(OP.slot!==Math.floor(Date.now()/OP_TF)||OP.uid!==uid))setTimeout(()=>oppRefresh(),0);
 }
-function oppRegister(p){
+async function oppRegister(p){
   const s=OP.st[p];if(!s||!s.pos)return;
-  const t=s.pos,sz=opSizing(OP.trades||[]),z=sz.get(OP.trades&&OP.trades.find(u=>u.pair===p&&u.tEnt===t.tEnt))||opSize(t.pe,t.stop);
-  openTradeForm({symbol:opName(p),dir:'long',mkt:'spot',strat:'D4h-v2',entry:+t.pe.toPrecision(8),sl:+t.stop.toPrecision(8),tp:null,qty:+z.qty.toPrecision(6),
+  const t=s.pos,sz=opSizing(OP.trades||[]),z=opTam(p,t,sz),cero=!(z.qty>0);
+  if(cero&&!await confirmBox('Sin capital disponible',`Esta señal de ${opName(p)} quedó con tamaño 0: tus posiciones abiertas ya usan todo el capital de aprendizaje. No se recomienda registrarla.`,'Abrir el formulario de todos modos','btn'))return;
+  openTradeForm({symbol:opName(p),dir:'long',mkt:'spot',strat:'D4h-v2',entry:+t.pe.toPrecision(8),sl:+t.stop.toPrecision(8),tp:null,qty:cero?null:+z.qty.toPrecision(6),
     openAt:new Date(t.tEnt).toISOString(),notes:`Regla ${OP_RULE}: señal de la vela de 4 h de las ${opHourStr(t.tSig)}; salida si cierra bajo el mínimo de 10 velas`},'opp');
 }
 setInterval(()=>{if(S.ui.view==='opo'&&!document.hidden&&!OP.busy&&OP.slot!==Math.floor(Date.now()/OP_TF))oppRefresh()},60000);
